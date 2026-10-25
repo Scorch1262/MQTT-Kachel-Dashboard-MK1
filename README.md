@@ -4,7 +4,7 @@ Lokales Web-Dashboard, das Werte aus **MQTT-Topics als Kacheln** anzeigt – im
 dunklen, technischen Design des Drucker Dashboards MK6. Ein einziges
 Python-Skript (`app.py`), **keine Zusatzpakete**, keine Cloud.
 
-**Version: 1.1.2**
+**Version: 1.1.3**
 
 | Plattform | Lieferform | Entsteht in |
 |---|---|---|
@@ -88,9 +88,9 @@ direkt neben der App.
 ## 4. GL.iNet Brume 2 – Zip kopieren und installieren (ohne GitHub)
 
 ```
-scp MQTT-Kachel-Dashboard-MK1-v1.1.2.zip root@<BRUME-IP>:/tmp/
+scp MQTT-Kachel-Dashboard-MK1-v1.1.3.zip root@<BRUME-IP>:/tmp/
 ssh root@<BRUME-IP>
-cd /tmp && unzip -o MQTT-Kachel-Dashboard-MK1-v1.1.2.zip
+cd /tmp && unzip -o MQTT-Kachel-Dashboard-MK1-v1.1.3.zip
 sh MQTT-Kachel-Dashboard-MK1/install.sh
 ```
 
@@ -126,7 +126,7 @@ Optionen: `--port=8086` (nur beim ersten Installieren), `--ohne-firewall`.
 **Update:** neueres Paket genauso entpacken und `sh install.sh` erneut starten –
 `config.json` bleibt erhalten. **Deinstallation:**
 `sh /root/MQTT-Kachel-Dashboard-MK1/uninstall.sh` (mit `--alles` inkl. Konfiguration).
-Log: `logread -e app.py`.
+Log: `logread | grep python`.
 
 Das Offline-Paket kann auch ohne GitHub auf einem eigenen PC mit Internet gebaut
 werden: `brume2/offline-paket-bauen-windows.bat` bzw.
@@ -220,6 +220,9 @@ brume2/offline-paket-bauen-*    Offline-Paket lokal bauen (Windows/Mac)
 
 ## Versionen
 
+- **1.1.3** – Installer erkennt belegten Port auf dem Brume und weicht automatisch aus,
+  wartet bis zu 20 s auf den Start, zeigt bei Fehlern die Log-Meldungen; Modulprüfung
+  vollständig; IP-Anzeige repariert.
 - **1.1.2** – `install.sh` im Hauptordner: Zip per scp auf den Brume kopieren, entpacken,
   `sh install.sh` – fertig. Installer holt fehlendes Python3 online per opkg.
 - **1.1.0** – Standard-Port 8085; Kachelgrößen-Umschalter S/M/L entfernt (iPhone immer

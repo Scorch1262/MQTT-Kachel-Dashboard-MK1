@@ -30,7 +30,7 @@ Update:          neueres Paket genauso entpacken und "sh install.sh" erneut
                  starten - config.json bleibt erhalten.
 Programmordner:  /root/MQTT-Kachel-Dashboard-MK1  (app.py + config.json)
 Dienst:          /etc/init.d/mqtt-kachel-dashboard start|stop|restart
-Log:             logread -e app.py
+Log:             logread | grep python
 Deinstallation:  sh /root/MQTT-Kachel-Dashboard-MK1/uninstall.sh [--alles]
 
 Der Port laesst sich jederzeit auf der Webseite aendern; die vom Installer

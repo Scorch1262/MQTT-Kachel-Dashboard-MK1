@@ -28,12 +28,11 @@ import subprocess
 import sys
 import threading
 import time
-import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 APP_NAME = "MQTT-Kachel-Dashboard-MK1"
-APP_VERSION = "1.1.2"
+APP_VERSION = "1.1.3"
 DEFAULT_PORT = 8085
 CONFIG_FILENAME = "config.json"
 
@@ -2201,6 +2200,7 @@ def main():
     for ip in local_ips():
         print("[Server] Webseite: http://%s:%d" % (ip, port))
     if getattr(sys, "frozen", False) and app.store.cfg["server"].get("browser_oeffnen", True):
+        import webbrowser   # nur bei exe/App noetig (fehlt evtl. in schlanken Python-Paketen)
         threading.Thread(target=lambda: (time.sleep(1.0), webbrowser.open("http://127.0.0.1:%d/" % port)),
                          daemon=True).start()
     try:

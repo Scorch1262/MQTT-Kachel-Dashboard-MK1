@@ -53,9 +53,11 @@ else
 fi
 
 # --- Python3 (online per opkg oder offline aus ipk/) ----------------
+# alle Module, die app.py beim Start braucht
+PY_MODULE="import base64, json, os, random, shutil, socket, ssl, string, struct, subprocess, sys, threading, time, http.server, socketserver, urllib.parse"
 python_ok() {
   command -v python3 >/dev/null 2>&1 && \
-  python3 -c "import ssl, json, socket, struct, http.server, socketserver, urllib.parse, threading" >/dev/null 2>&1
+  python3 -c "$PY_MODULE" >/dev/null 2>&1
 }
 
 if python_ok; then
@@ -101,6 +103,28 @@ fi
 PORT=$("$PY" -c "import json,sys; print(int(json.load(open(sys.argv[1]))['server']['port']))" "$ZIEL/config.json" 2>/dev/null)
 [ -n "$PORT" ] || PORT=8085
 
+# --- Port pruefen (eigener Dienst ist oben bereits gestoppt) ----------
+port_belegt() {
+  netstat -ltn 2>/dev/null | awk '{print $4}' | grep -q "[:.]$1\$"
+}
+if port_belegt "$PORT"; then
+  WER=$(netstat -ltnp 2>/dev/null | awk -v p=":$PORT" '$4 ~ p"$" {print $7}' | head -n 1)
+  ALT=$PORT
+  while port_belegt "$PORT"; do PORT=$((PORT + 1)); done
+  say "Port $ALT ist auf dem Brume bereits belegt${WER:+ (von $WER)} - verwende Port $PORT."
+  "$PY" - "$ZIEL/config.json" "$PORT" <<'PYEOF'
+import json, os, sys
+pfad, port = sys.argv[1], int(sys.argv[2])
+cfg = {}
+if os.path.exists(pfad):
+    with open(pfad, encoding="utf-8") as f:
+        cfg = json.load(f)
+cfg.setdefault("server", {})["port"] = port
+with open(pfad, "w", encoding="utf-8") as f:
+    json.dump(cfg, f, indent=2, ensure_ascii=False)
+PYEOF
+fi
+
 # --- Autostart (procd) ---------------------------------------------
 cat > /etc/init.d/$SERVICE <<EOF
 #!/bin/sh /etc/rc.common
@@ -137,22 +161,32 @@ fi
 
 # --- Starten ---------------------------------------------------------
 /etc/init.d/$SERVICE start
-sleep 4
+say "Warte auf das Dashboard ..."
 OK=0
-if command -v wget >/dev/null 2>&1; then
-  wget -q -O /dev/null "http://127.0.0.1:$PORT/api/state" && OK=1
-elif command -v curl >/dev/null 2>&1; then
-  curl -fs -o /dev/null "http://127.0.0.1:$PORT/api/state" && OK=1
-fi
+i=0
+while [ $i -lt 20 ]; do
+  sleep 1
+  i=$((i + 1))
+  if command -v wget >/dev/null 2>&1; then
+    wget -q -O /dev/null "http://127.0.0.1:$PORT/api/state" 2>/dev/null && OK=1
+  elif command -v curl >/dev/null 2>&1; then
+    curl -fs -o /dev/null "http://127.0.0.1:$PORT/api/state" && OK=1
+  fi
+  [ "$OK" = "1" ] && break
+done
 if [ "$OK" = "1" ]; then
-  say "Dashboard laeuft."
+  say "Dashboard laeuft (Port $PORT)."
 else
-  say "Dashboard antwortet noch nicht - Log ansehen mit: logread -e app.py"
+  say "FEHLER: Dashboard antwortet nicht auf Port $PORT."
+  say "Letzte Log-Meldungen:"
+  logread 2>/dev/null | grep -E "python|Server\]|MQTT\]|Config\]|Traceback|Error" | tail -n 20
+  say "Direkter Test (Strg+C beendet):"
+  say "  /etc/init.d/$SERVICE stop; $PY $ZIEL/app.py"
 fi
 
 echo ""
 say "Fertig! Erreichbar unter:"
-IPS=$(ip -4 -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | grep -v '^127\.')
+IPS=$(ip -4 addr show 2>/dev/null | awk '/inet / {split($2, a, "/"); print a[1]}' | grep -v '^127\.')
 [ -n "$IPS" ] || IPS=$(uci -q get network.lan.ipaddr 2>/dev/null)
 [ -n "$IPS" ] || IPS="<IP-des-Brume>"
 for ip in $IPS; do

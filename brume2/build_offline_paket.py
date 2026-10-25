@@ -206,14 +206,6 @@ def main():
 
     with tarfile.open(ziel, "w:gz") as tar:
         tar.add(stage, arcname=ordner_name, filter=filt)
-    # Zusaetzlich die .ipk-Dateien als Ordner dist/ipk ablegen - die Skripte
-    # brume-installieren-windows.bat / -mac.command schicken sie dann
-    # automatisch mit, falls der Brume selbst kein Internet hat.
-    ipk_out = os.path.join(args.out, "ipk")
-    shutil.rmtree(ipk_out, ignore_errors=True)
-    if not args.ohne_python:
-        shutil.copytree(os.path.join(stage, "ipk"), ipk_out)
-        print("== Python-Pakete fuer brume-installieren-*: %s" % ipk_out)
     shutil.rmtree(arbeit, ignore_errors=True)
     print("== Fertig: %s (%.1f MB)" % (ziel, os.path.getsize(ziel) / 1048576.0))
 

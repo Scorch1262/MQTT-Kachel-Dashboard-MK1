@@ -2,8 +2,7 @@
 # ------------------------------------------------------------------
 # MQTT-Kachel-Dashboard-MK1 - Offline-Installation fuer GL.iNet Brume 2
 #
-# Normalerweise vom PC aus per brume2/brume-installieren-windows.bat bzw.
-# brume2/brume-installieren-mac.command gestartet (kein GitHub noetig).
+# Normalerweise ueber die install.sh im Hauptordner der Zip gestartet.
 # Direkter Aufruf auf dem Brume 2 (im entpackten Ordner):
 #   sh install.sh                 Installieren bzw. aktualisieren
 #   sh install.sh --port=8086     beim ERSTEN Installieren anderen Port setzen
@@ -74,8 +73,8 @@ else
       opkg install python3 || say "opkg meldete Warnungen - pruefe Python ..."
     else
       fail "Python3 fehlt und der Brume erreicht die Paketquellen nicht (kein Internet?).
-       Loesung: am PC das Offline-Paket bauen (brume2/offline-paket-bauen-windows.bat
-       bzw. -mac.command) und dieses installieren - siehe README Abschnitt 4."
+       Loesung: Brume kurz mit dem Internet verbinden oder am PC das Offline-Paket
+       bauen (brume2/offline-paket-bauen-*) - siehe README Abschnitt 4."
     fi
   fi
   python_ok || fail "Python3 konnte nicht installiert werden (siehe Meldungen oben)."

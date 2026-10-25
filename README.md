@@ -4,7 +4,7 @@ Lokales Web-Dashboard, das Werte aus **MQTT-Topics als Kacheln** anzeigt – im
 dunklen, technischen Design des Drucker Dashboards MK6. Ein einziges
 Python-Skript (`app.py`), **keine Zusatzpakete**, keine Cloud.
 
-**Version: 1.1.1**
+**Version: 1.1.2**
 
 | Plattform | Lieferform | Entsteht in |
 |---|---|---|
@@ -85,30 +85,19 @@ direkt neben der App.
   `~/MQTT-Kachel-Dashboard-MK1/config.json` (Pfad steht unter *Einstellungen → Info*).
 - Gebaut für Apple Silicon (M1–M4). Auf Intel-Macs `python3 app.py` verwenden.
 
-## 4. GL.iNet Brume 2 – direkt vom PC (ohne GitHub)
+## 4. GL.iNet Brume 2 – Zip kopieren und installieren (ohne GitHub)
 
-Keine GitHub Actions nötig. Projektordner entpacken, dann:
+```
+scp MQTT-Kachel-Dashboard-MK1-v1.1.2.zip root@<BRUME-IP>:/tmp/
+ssh root@<BRUME-IP>
+cd /tmp && unzip -o MQTT-Kachel-Dashboard-MK1-v1.1.2.zip
+sh MQTT-Kachel-Dashboard-MK1/install.sh
+```
 
-- **Windows 10/11:** Doppelklick auf `brume2\brume-installieren-windows.bat`
-- **macOS/Linux:** Doppelklick auf `brume2/brume-installieren-mac.command`
-  (beim ersten Mal ggf. Rechtsklick → *Öffnen*)
-
-Das Skript fragt nach der **IP-Adresse des Brume** (Standard 192.168.8.1) und dem
-**root-Passwort** (= Admin-Passwort der GL.iNet-Weboberfläche, nur eine Abfrage).
-Danach überträgt es `app.py` und den Installer per SSH und startet die Installation
-(Autostart, Firewall-Regel – wie unten beschrieben). Optionen wie `--port=8086` oder
-`--ohne-firewall` können angehängt werden (Eingabeaufforderung/Terminal).
-
-**Python3 auf dem Brume:**
-- schon vorhanden → wird genutzt,
-- fehlt, Brume hat Internet → wird automatisch per `opkg install python3` installiert,
-- fehlt, Brume hat **kein** Internet → vorher am PC (mit Internet und Python 3)
-  `brume2/offline-paket-bauen-windows.bat` bzw. `-mac.command` ausführen. Die
-  Python-Pakete landen in `dist/ipk` und werden vom Installier-Skript automatisch
-  mitgeschickt.
-
-Ein **Update** funktioniert genauso: neues `app.py` in den Projektordner legen und das
-Skript erneut starten – `config.json` auf dem Brume bleibt erhalten.
+`install.sh` erledigt den Rest: Python3 installieren falls nötig (online per opkg),
+Programm nach `/root/MQTT-Kachel-Dashboard-MK1/` kopieren, Autostart und
+Firewall-Regel einrichten, starten. Optionen: `--port=8086`, `--ohne-firewall`.
+Update = neue Zip genauso entpacken und `install.sh` erneut starten.
 
 ## 4b. GL.iNet Brume 2 (Offline-Paket aus dem GitHub-Release)
 
@@ -216,6 +205,7 @@ gesichert und das Programm startet mit Standardwerten.
 ## Dateien
 
 ```
+install.sh                      Installation auf dem Brume 2 (startet brume2/install.sh)
 app.py                          Programm (Server, MQTT-Client, Webseite)
 requirements.txt                nur für den Build (PyInstaller)
 assets/icon.ico|icns|png        Programmsymbole
@@ -226,14 +216,12 @@ brume2/install.sh               Installer auf dem Brume 2
 brume2/uninstall.sh             Deinstallation
 brume2/LIESMICH-BRUME2.txt      Kurzanleitung im Paket
 brume2/offline-paket-bauen-*    Offline-Paket lokal bauen (Windows/Mac)
-brume2/brume-installieren-*     Installation vom PC per SSH, ohne GitHub (Windows/Mac/Linux)
 ```
 
 ## Versionen
 
-- **1.1.1** – Installation auf dem Brume 2 direkt vom PC per SSH (ohne GitHub Actions):
-  `brume2/brume-installieren-windows.bat` / `-mac.command`; Installer holt Python3 bei
-  Bedarf online per opkg oder nimmt lokal gebaute Pakete aus `dist/ipk`.
+- **1.1.2** – `install.sh` im Hauptordner: Zip per scp auf den Brume kopieren, entpacken,
+  `sh install.sh` – fertig. Installer holt fehlendes Python3 online per opkg.
 - **1.1.0** – Standard-Port 8085; Kachelgrößen-Umschalter S/M/L entfernt (iPhone immer
   zwei Kacheln nebeneinander, sonst nach Fensterbreite); Broker-Status nicht mehr auf der
   Kachel-Ansicht; Symbol „E-Fahrrad“; Zeitangabe („gerade eben“) auf den Kacheln entfernt.

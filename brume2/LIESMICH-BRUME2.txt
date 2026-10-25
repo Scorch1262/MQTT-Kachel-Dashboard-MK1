@@ -1,0 +1,37 @@
+MQTT-Kachel-Dashboard-MK1 - Offline-Installation auf GL.iNet Brume 2 (GL-MT2500)
+================================================================================
+
+Der Brume 2 braucht fuer diese Installation KEIN Internet. Alle noetigen
+Python3-Pakete liegen im Unterordner "ipk/" bei.
+
+1) Paket auf den Brume 2 kopieren (vom PC aus, PowerShell/Terminal):
+
+     scp MQTT-Kachel-Dashboard-v*-brume2-offline.tar.gz root@<BRUME-IP>:/tmp/
+
+   (Neuere Windows-/macOS-scp-Versionen brauchen ggf. "scp -O ...".)
+
+2) Per SSH anmelden und installieren:
+
+     ssh root@<BRUME-IP>
+     cd /tmp
+     tar xzf MQTT-Kachel-Dashboard-v*-brume2-offline.tar.gz
+     cd MQTT-Kachel-Dashboard-brume2
+     sh install.sh
+
+   Optionen:
+     sh install.sh --port=8091      anderer Port beim ersten Installieren
+     sh install.sh --ohne-firewall  keine Freigabe des Ports auf der WAN-Seite
+
+3) Im Browser oeffnen:  http://<BRUME-IP>:8090
+   Unter "Einstellungen" den MQTT-Broker eintragen (laeuft Mosquitto auf dem
+   Brume selbst: Host 127.0.0.1, Port 1883) und Kacheln anlegen.
+
+Update:          neueres Paket genauso entpacken und "sh install.sh" erneut
+                 starten - config.json bleibt erhalten.
+Programmordner:  /root/MQTT-Kachel-Dashboard-MK1  (app.py + config.json)
+Dienst:          /etc/init.d/mqtt-kachel-dashboard start|stop|restart
+Log:             logread -e app.py
+Deinstallation:  sh /root/MQTT-Kachel-Dashboard-MK1/uninstall.sh [--alles]
+
+Der Port laesst sich jederzeit auf der Webseite aendern; die vom Installer
+angelegte Firewall-Regel wird dabei automatisch mit angepasst.

@@ -1,0 +1,127 @@
+name: Build & Release
+
+# Baut bei jedem Push auf main (oder per "Run workflow"):
+#   1. Windows: MQTT-Kachel-Dashboard.exe          (PyInstaller --onefile, mit Konsole)
+#   2. macOS:   MQTT-Kachel-Dashboard.app          (PyInstaller, Apple Silicon/arm64)
+#   3. Brume 2: Offline-Installationspaket (.tar.gz) inkl. aller Python3-.ipk-Pakete
+# und haengt alle drei an ein GitHub-Release "vX.Y.Z" an. Die Versionsnummer
+# kommt aus APP_VERSION in app.py - ohne Versionserhoehung wird das bestehende
+# Release mit demselben Tag aktualisiert.
+
+permissions:
+  contents: write
+
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ "v*.*.*" ]
+  workflow_dispatch: {}
+
+env:
+  APP_NAME: MQTT-Kachel-Dashboard
+  # GL.iNet Brume 2 (GL-MT2500, Firmware 4.x) basiert auf OpenWrt 21.02
+  OPENWRT_RELEASE: "21.02.7"
+  OPENWRT_ARCH: "aarch64_cortex-a53"
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: v
+        run: |
+          VERSION=$(python3 -c "import re; print(re.search(r'APP_VERSION\s*=\s*\"([^\"]+)\"', open('app.py', encoding='utf-8').read()).group(1))")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION"
+
+  windows:
+    needs: version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: PyInstaller installieren
+        run: pip install -r requirements.txt
+      - name: exe bauen
+        run: pyinstaller --noconfirm --onefile --console --name ${{ env.APP_NAME }} --icon assets/icon.ico app.py
+      - name: Zip erstellen
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          Copy-Item README.md dist/README.md
+          Compress-Archive -Path "dist/${{ env.APP_NAME }}.exe", "dist/README.md" -DestinationPath "out/${{ env.APP_NAME }}-v${{ needs.version.outputs.version }}-windows.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: out/*
+          if-no-files-found: error
+
+  macos:
+    needs: version
+    runs-on: macos-latest   # Apple Silicon (arm64)
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: PyInstaller installieren
+        run: pip install -r requirements.txt
+      - name: App bauen
+        run: |
+          pyinstaller --noconfirm --windowed --name ${{ env.APP_NAME }} --icon assets/icon.icns \
+            --osx-bundle-identifier de.mqtt-kachel-dashboard.mk1 app.py
+      - name: Als Hintergrund-App kennzeichnen (kein Dock-Symbol) und neu signieren
+        run: |
+          APP="dist/${{ env.APP_NAME }}.app"
+          plutil -replace LSUIElement -bool true "$APP/Contents/Info.plist"
+          plutil -replace CFBundleShortVersionString -string "${{ needs.version.outputs.version }}" "$APP/Contents/Info.plist"
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep --strict "$APP" || echo "::warning::codesign-Pruefung meldet Hinweise (App ist trotzdem ad-hoc signiert)"
+      - name: Zip erstellen (ditto bewahrt Rechte und Signatur)
+        run: |
+          mkdir -p out pkg
+          ditto "dist/${{ env.APP_NAME }}.app" "pkg/${{ env.APP_NAME }}.app"
+          cp README.md pkg/README.md
+          ditto -c -k --sequesterRsrc pkg "out/${{ env.APP_NAME }}-v${{ needs.version.outputs.version }}-macos-arm64.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: out/*
+          if-no-files-found: error
+
+  brume2:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Offline-Paket fuer GL.iNet Brume 2 bauen
+        run: python3 brume2/build_offline_paket.py --release "$OPENWRT_RELEASE" --arch "$OPENWRT_ARCH" --out out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: brume2
+          path: out/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: [version, windows, macos, brume2]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          path: out
+          merge-multiple: true
+      - run: ls -la out
+      - name: GitHub Release erstellen/aktualisieren
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v${{ needs.version.outputs.version }}"
+          name: "v${{ needs.version.outputs.version }}"
+          target_commitish: ${{ github.sha }}
+          files: out/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

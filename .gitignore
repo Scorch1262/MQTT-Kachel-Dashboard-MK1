@@ -1,0 +1,21 @@
+# Vom Nutzer erzeugt - enthaelt Broker-Zugangsdaten
+config.json
+config.json.tmp
+config.json.defekt-*
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Build
+build/
+dist/
+out/
+*.spec
+
+# Editor/OS
+.DS_Store
+.vscode/
+.idea/

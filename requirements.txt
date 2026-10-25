@@ -1,0 +1,3 @@
+# Zur LAUFZEIT werden keine Zusatzpakete benoetigt (nur Python-Standardbibliothek).
+# Diese Datei wird nur fuer den exe/App-Build in GitHub Actions gebraucht:
+pyinstaller

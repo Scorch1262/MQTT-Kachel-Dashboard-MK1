@@ -1,0 +1,10 @@
+# Shell-Skripte fuer den Brume 2 MUESSEN Unix-Zeilenenden behalten,
+# sonst bricht busybox-sh mit "not found"-Fehlern ab.
+*.sh       text eol=lf
+*.py       text eol=lf
+*.command  text eol=lf
+*.yml      text eol=lf
+*.bat      text eol=crlf
+*.ico      binary
+*.icns     binary
+*.png      binary

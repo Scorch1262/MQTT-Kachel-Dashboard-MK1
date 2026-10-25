@@ -6,6 +6,8 @@ Python-Skript (`app.py`), **keine Zusatzpakete**, keine Cloud.
 
 **Version: 1.1.3**
 
+![Vorschau: Kachel-Ansicht am Rechner und auf dem iPhone](docs/vorschau.png)
+
 | Plattform | Lieferform | Entsteht in |
 |---|---|---|
 | Windows | `MQTT-Kachel-Dashboard.exe` | GitHub Actions |
@@ -205,6 +207,7 @@ gesichert und das Programm startet mit Standardwerten.
 ## Dateien
 
 ```
+docs/vorschau.png               Vorschaubild für die README
 install.sh                      Installation auf dem Brume 2 (startet brume2/install.sh)
 app.py                          Programm (Server, MQTT-Client, Webseite)
 requirements.txt                nur für den Build (PyInstaller)

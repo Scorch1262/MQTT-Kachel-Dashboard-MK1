@@ -2,7 +2,9 @@
 # ------------------------------------------------------------------
 # MQTT-Kachel-Dashboard-MK1 - Offline-Installation fuer GL.iNet Brume 2
 #
-# Aufruf (im entpackten Ordner auf dem Brume 2):
+# Normalerweise vom PC aus per brume2/brume-installieren-windows.bat bzw.
+# brume2/brume-installieren-mac.command gestartet (kein GitHub noetig).
+# Direkter Aufruf auf dem Brume 2 (im entpackten Ordner):
 #   sh install.sh                 Installieren bzw. aktualisieren
 #   sh install.sh --port=8086     beim ERSTEN Installieren anderen Port setzen
 #   sh install.sh --ohne-firewall keine Firewall-Regel fuer den WAN-Port anlegen
@@ -30,7 +32,12 @@ for a in "$@"; do
 done
 
 [ "$(id -u)" = "0" ] || fail "Bitte als root ausfuehren."
-[ -f "$QUELLE/app.py" ] || fail "app.py nicht gefunden - install.sh bitte im entpackten Ordner starten."
+# app.py liegt im Offline-Paket neben install.sh, im Projektordner eine Ebene hoeher
+APP_SRC=""
+for d in "$QUELLE" "$QUELLE/.."; do
+  [ -f "$d/app.py" ] && APP_SRC="$d/app.py" && break
+done
+[ -n "$APP_SRC" ] || fail "app.py nicht gefunden - install.sh bitte im entpackten Ordner starten."
 
 # --- System pruefen ------------------------------------------------
 if [ -f /etc/openwrt_release ]; then
@@ -46,7 +53,7 @@ else
   say "WARNUNG: Kein OpenWrt erkannt - Installation wird trotzdem versucht."
 fi
 
-# --- Python3 (offline) ---------------------------------------------
+# --- Python3 (online per opkg oder offline aus ipk/) ----------------
 python_ok() {
   command -v python3 >/dev/null 2>&1 && \
   python3 -c "import ssl, json, socket, struct, http.server, socketserver, urllib.parse, threading" >/dev/null 2>&1
@@ -55,12 +62,22 @@ python_ok() {
 if python_ok; then
   say "Python3 ist bereits vorhanden: $(python3 --version 2>&1)"
 else
-  set -- "$QUELLE"/ipk/*.ipk
-  [ -f "$1" ] || fail "Python3 fehlt und das Paket enthaelt keine .ipk-Dateien (mit --ohne-python gebaut?)."
-  say "Installiere Python3 offline aus $# Paketen (kann 1-2 Minuten dauern) ..."
   FREI=$(df -k /overlay 2>/dev/null | awk 'NR==2 {print $4}')
   [ -n "$FREI" ] && [ "$FREI" -lt 60000 ] && say "WARNUNG: nur $((FREI/1024)) MB frei auf /overlay."
-  opkg install "$@" || say "opkg meldete Warnungen - pruefe Python ..."
+  set -- "$QUELLE"/ipk/*.ipk
+  if [ -f "$1" ]; then
+    say "Installiere Python3 offline aus $# Paketen (kann 1-2 Minuten dauern) ..."
+    opkg install "$@" || say "opkg meldete Warnungen - pruefe Python ..."
+  else
+    say "Python3 fehlt - installiere es aus dem Internet (opkg) ..."
+    if opkg update; then
+      opkg install python3 || say "opkg meldete Warnungen - pruefe Python ..."
+    else
+      fail "Python3 fehlt und der Brume erreicht die Paketquellen nicht (kein Internet?).
+       Loesung: am PC das Offline-Paket bauen (brume2/offline-paket-bauen-windows.bat
+       bzw. -mac.command) und dieses installieren - siehe README Abschnitt 4."
+    fi
+  fi
   python_ok || fail "Python3 konnte nicht installiert werden (siehe Meldungen oben)."
   say "Python3 installiert: $(python3 --version 2>&1)"
 fi
@@ -71,7 +88,7 @@ mkdir -p "$ZIEL" || fail "Ordner $ZIEL konnte nicht angelegt werden."
 if [ -x /etc/init.d/$SERVICE ]; then
   /etc/init.d/$SERVICE stop >/dev/null 2>&1
 fi
-cp "$QUELLE/app.py" "$ZIEL/app.py" || fail "Kopieren von app.py fehlgeschlagen."
+cp "$APP_SRC" "$ZIEL/app.py" || fail "Kopieren von app.py fehlgeschlagen."
 chmod 755 "$ZIEL/app.py"
 [ -f "$QUELLE/LIESMICH-BRUME2.txt" ] && cp "$QUELLE/LIESMICH-BRUME2.txt" "$ZIEL/"
 [ -f "$QUELLE/uninstall.sh" ] && cp "$QUELLE/uninstall.sh" "$ZIEL/" && chmod 755 "$ZIEL/uninstall.sh"

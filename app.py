@@ -33,7 +33,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 APP_NAME = "MQTT-Kachel-Dashboard-MK1"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.1"
 DEFAULT_PORT = 8085
 CONFIG_FILENAME = "config.json"
 

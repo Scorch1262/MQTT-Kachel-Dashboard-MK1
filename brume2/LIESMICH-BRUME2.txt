@@ -19,10 +19,10 @@ Python3-Pakete liegen im Unterordner "ipk/" bei.
      sh install.sh
 
    Optionen:
-     sh install.sh --port=8091      anderer Port beim ersten Installieren
+     sh install.sh --port=8086      anderer Port beim ersten Installieren
      sh install.sh --ohne-firewall  keine Freigabe des Ports auf der WAN-Seite
 
-3) Im Browser oeffnen:  http://<BRUME-IP>:8090
+3) Im Browser oeffnen:  http://<BRUME-IP>:8085
    Unter "Einstellungen" den MQTT-Broker eintragen (laeuft Mosquitto auf dem
    Brume selbst: Host 127.0.0.1, Port 1883) und Kacheln anlegen.
 

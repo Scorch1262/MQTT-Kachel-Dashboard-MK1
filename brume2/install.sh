@@ -4,7 +4,7 @@
 #
 # Aufruf (im entpackten Ordner auf dem Brume 2):
 #   sh install.sh                 Installieren bzw. aktualisieren
-#   sh install.sh --port=8091     beim ERSTEN Installieren anderen Port setzen
+#   sh install.sh --port=8086     beim ERSTEN Installieren anderen Port setzen
 #   sh install.sh --ohne-firewall keine Firewall-Regel fuer den WAN-Port anlegen
 #
 # Erneutes Ausfuehren mit einem neueren Paket = Update (config.json bleibt).
@@ -83,7 +83,7 @@ elif [ -n "$PORT_ARG" ]; then
   echo "{\"server\": {\"port\": $PORT_ARG}}" > "$ZIEL/config.json"
 fi
 PORT=$("$PY" -c "import json,sys; print(int(json.load(open(sys.argv[1]))['server']['port']))" "$ZIEL/config.json" 2>/dev/null)
-[ -n "$PORT" ] || PORT=8090
+[ -n "$PORT" ] || PORT=8085
 
 # --- Autostart (procd) ---------------------------------------------
 cat > /etc/init.d/$SERVICE <<EOF

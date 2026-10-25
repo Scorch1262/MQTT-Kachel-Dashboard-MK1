@@ -33,8 +33,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 APP_NAME = "MQTT-Kachel-Dashboard-MK1"
-APP_VERSION = "1.0.0"
-DEFAULT_PORT = 8090
+APP_VERSION = "1.1.0"
+DEFAULT_PORT = 8085
 CONFIG_FILENAME = "config.json"
 
 MAX_TOPICS = 5000            # max. gemerkte Topics (Kachel-Topics immer)
@@ -127,6 +127,9 @@ ICONS = [
     ("auto", "Auto / Wallbox",
      '<path d="M3 13l2-5a2 2 0 0 1 1.9-1.3h10.2A2 2 0 0 1 19 8l2 5v4H3z"/><path d="M3 13h18"/>'
      '<circle cx="7.5" cy="17" r="1.8"/><circle cx="16.5" cy="17" r="1.8"/>'),
+    ("ebike", "E-Fahrrad",
+     '<circle cx="5" cy="17.5" r="3.5"/><circle cx="19" cy="17.5" r="3.5"/>'
+     '<path d="M5 17.5 8 12h7l4 5.5M8 12l3.5 5.5L15 12M6.5 10h3M8 12l-.5-2M15 12l-1-3h2"/><path d="M13 1.5 10.5 5H13l-2 3.5"/>'),
     ("thermometer", "Temperatur",
      '<path d="M14 14.8V4a2 2 0 0 0-4 0v10.8a4 4 0 1 0 4 0z"/><path d="M12 9v6"/>'),
     ("tropfen", "Feuchte / Wasser",
@@ -1264,7 +1267,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
     --info:#4aa3ff;
     --mono: 'JetBrains Mono', 'Consolas', 'SFMono-Regular', ui-monospace, Menlo, monospace;
     --sans: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
-    --tile-min: 230px;
+    --tile-min: 235px;
     --gut-l: max(32px, env(safe-area-inset-left));
     --gut-r: max(32px, env(safe-area-inset-right));
   }
@@ -1275,9 +1278,6 @@ INDEX_HTML = r"""<!DOCTYPE html>
     font-family:var(--sans); letter-spacing:0.1px; min-height:100vh;
     padding-bottom:env(safe-area-inset-bottom);
   }
-  body.size-s{ --tile-min:175px; }
-  body.size-m{ --tile-min:235px; }
-  body.size-l{ --tile-min:330px; }
 
   header{
     display:flex; align-items:center; justify-content:space-between; gap:14px; flex-wrap:wrap;
@@ -1318,20 +1318,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .btn-mini.btn-delete:hover{ border-color:var(--danger); }
   .btn-mini:disabled{ opacity:.35; cursor:default; }
 
-  .layout-switch{ display:flex; border:1px solid var(--border); border-radius:6px; overflow:hidden; }
-  .layout-btn{
-    background:#1b2027; color:var(--text-dim); border:none; border-right:1px solid var(--border);
-    padding:9px 13px; font-size:12px; font-family:var(--mono); cursor:pointer;
-  }
-  .layout-btn:last-child{ border-right:none; }
-  .layout-btn:hover{ color:var(--text); }
-  .layout-btn.active{ background:var(--accent); color:#12100c; font-weight:600; }
 
-  .broker-pill{
-    display:flex; align-items:center; gap:8px; font-family:var(--mono); font-size:11.5px;
-    color:var(--text-dim); border:1px solid var(--border); border-radius:20px; padding:6px 12px;
-    background:#1b2027; max-width:300px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
-  }
   .status-dot{
     width:9px; height:9px; border-radius:50%; display:inline-block; flex-shrink:0;
     background:var(--danger);
@@ -1382,20 +1369,6 @@ INDEX_HTML = r"""<!DOCTYPE html>
     border:1px solid currentColor; letter-spacing:.3px; font-weight:600;
     background:rgba(255,255,255,0.02); max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
   }
-  .tile-foot{
-    font-family:var(--mono); font-size:11px; color:var(--text-dim);
-    padding:9px 16px; border-top:1px solid var(--border); display:flex; align-items:center; gap:8px;
-  }
-  .tile-foot .status-dot{ width:7px; height:7px; }
-  body.size-s .tile-topic{ display:none; }
-  body.size-s .tile-head{ padding:11px 12px; gap:10px; }
-  body.size-s .tile-icon{ width:34px; height:34px; }
-  body.size-s .tile-icon svg{ width:20px; height:20px; }
-  body.size-s .tile-body{ padding:12px; }
-  body.size-s .tile-foot{ padding:7px 12px; }
-  body.size-l .tile-icon{ width:48px; height:48px; }
-  body.size-l .tile-icon svg{ width:28px; height:28px; }
-  body.size-l .tile-name{ font-size:17px; }
 
   .empty-state{ grid-column:1/-1; text-align:center; padding:70px 20px; color:var(--text-dim); }
   .empty-state h2{ color:var(--text); font-size:16px; text-transform:uppercase; letter-spacing:.5px; }
@@ -1507,41 +1480,29 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .preview-wrap .tile{ max-width:320px; margin:0 auto; }
   .sep{ border:none; border-top:1px solid var(--border); margin:16px 0; }
 
+  .offline-note{ display:none; font-family:var(--mono); font-size:11.5px; color:var(--danger); }
+  .offline-note.show{ display:inline; }
+
   /* ---------- Handy / iPhone ---------- */
   @media (max-width:760px){
     :root{ --gut-l:max(14px, env(safe-area-inset-left)); --gut-r:max(14px, env(safe-area-inset-right)); }
     header{ padding-top:max(12px, env(safe-area-inset-top)); padding-bottom:12px; gap:10px; }
-    header h1{ font-size:16px; flex:1 1 100%; }
-    .head-controls{ width:100%; gap:8px; }
-    .broker-pill{ order:3; flex:1 1 100%; max-width:none; justify-content:flex-start; }
-    .head-controls .btn{ margin-left:auto; padding:9px 14px; }
+    header{ flex-wrap:nowrap; }
+    header h1{ font-size:16px; flex:1 1 auto; min-width:0; }
+    .head-controls{ gap:8px; flex-shrink:0; }
+    .head-controls .btn{ padding:9px 14px; }
     #tiles{ padding-top:14px; padding-bottom:20px; gap:12px; }
-    body.size-s{ --tile-min:105px; }
-    body.size-m{ --tile-min:155px; }
-    body.size-l{ --tile-min:290px; }
     .tile-head{ padding:11px 12px; gap:10px; }
     .tile-icon{ width:36px; height:36px; }
     .tile-icon svg{ width:21px; height:21px; }
     .tile-name{ font-size:14px; }
     .tile-body{ padding:12px; gap:10px; }
-    .tile-foot{ padding:7px 12px; }
     .tile-topic{ display:none; }
-    body.size-l .tile-topic{ display:block; }
     #settingsPanel{ padding-top:14px; }
     .settings-section{ padding:16px; }
     .form-grid{ grid-template-columns:1fr; }
     .form-grid.keep2{ grid-template-columns:repeat(2, minmax(0,1fr)); gap:4px 10px; }
-    .tile-name{ white-space:normal; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow-wrap:break-word; line-height:1.2; }
-    body.size-s .tile-head{ flex-direction:column; align-items:flex-start; gap:7px; padding:10px; }
-    body.size-s .tile-icon{ width:30px; height:30px; border-radius:7px; }
-    body.size-s .tile-icon svg{ width:18px; height:18px; }
-    body.size-s .tile-titles{ width:100%; }
-    body.size-s .tile-name{ font-size:12.5px; display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-    body.size-s .tile-body{ padding:10px; gap:8px; }
-    body.size-s .tile-value{ font-size:clamp(19px, 17cqi, 30px); }
-    body.size-s .tile-value.nodata, body.size-s .tile-value.err{ font-size:11.5px; }
-    body.size-s .chip{ font-size:10px; padding:2px 7px; }
-    body.size-s .tile-foot{ padding:6px 10px; font-size:10px; }
+    .tile-name{ white-space:normal; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; -webkit-hyphens:auto; hyphens:auto; overflow-wrap:break-word; line-height:1.2; }
     /* iOS zoomt bei Eingabefeldern < 16px automatisch hinein */
     input[type=text], input[type=number], input[type=password], input[type=search], select{ font-size:16px; }
     .thr-row{ grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto; padding:8px; border:1px solid var(--border); border-radius:8px; }
@@ -1553,20 +1514,21 @@ INDEX_HTML = r"""<!DOCTYPE html>
     .manage-row{ flex-wrap:wrap; }
     .manage-actions{ width:100%; justify-content:flex-start; padding-left:42px; }
   }
+  /* iPhone (hoch und quer): immer genau zwei Kacheln nebeneinander.
+     iPad/Rechner: Anzahl richtet sich nach der Fensterbreite (auto-fill oben). */
+  @media (max-width:600px), (max-height:500px) and (pointer:coarse){
+    #tiles{ grid-template-columns:repeat(2, minmax(0, 1fr)); }
+    .tile-value{ font-size:clamp(22px, 13cqi, 40px); }
+  }
   @media (hover:none){ .btn-mini{ padding:8px 12px; font-size:12px; } }
 </style>
 </head>
-<body class="size-m">
+<body>
 
 <header>
   <h1 id="appTitle"><span id="titleA">MQTT</span> <span class="acc" id="titleB">Kacheln</span> <span class="ver-badge">v__APP_VERSION__</span></h1>
   <div class="head-controls" id="operatorControls">
-    <div class="broker-pill" id="brokerPill" title="MQTT-Broker"><span class="status-dot idle" id="brokerDot"></span><span id="brokerText">Broker ...</span></div>
-    <div class="layout-switch" title="Kachelgröße">
-      <button type="button" class="layout-btn" data-size="s" onclick="setSize('s')">S</button>
-      <button type="button" class="layout-btn" data-size="m" onclick="setSize('m')">M</button>
-      <button type="button" class="layout-btn" data-size="l" onclick="setSize('l')">L</button>
-    </div>
+    <span class="offline-note" id="offlineNote">Dashboard nicht erreichbar</span>
     <button class="btn" onclick="enterSettings()">&#9881; Einstellungen</button>
   </div>
   <div class="head-controls" id="settingsControls" style="display:none;">
@@ -1744,25 +1706,6 @@ async function api(path, body){
   return j;
 }
 
-function agoText(sec){
-  if(sec == null) return '';
-  sec = Math.max(0, sec);
-  if(sec < 5) return 'gerade eben';
-  if(sec < 60) return 'vor ' + Math.round(sec) + ' s';
-  if(sec < 3600) return 'vor ' + Math.round(sec/60) + ' min';
-  if(sec < 86400) return 'vor ' + Math.round(sec/3600) + ' h';
-  return 'vor ' + Math.round(sec/86400) + ' d';
-}
-
-/* ---------- Groesse ---------- */
-function setSize(s){
-  if(!['s','m','l'].includes(s)) s = 'm';
-  document.body.classList.remove('size-s','size-m','size-l');
-  document.body.classList.add('size-' + s);
-  document.querySelectorAll('.layout-btn').forEach(b => b.classList.toggle('active', b.dataset.size === s));
-  lsSet('kachelGroesse', s);
-}
-
 /* ---------- Titel ---------- */
 function setTitle(t){
   t = (t || 'MQTT Kacheln').trim();
@@ -1790,8 +1733,6 @@ function tileHtml(t, nowServer){
   }
   const chips = (t.treffer || []).filter(m => m.text).map(m =>
     `<span class="chip" style="color:${m.farbe}" title="${esc(m.text)}">${esc(m.text)}</span>`).join('');
-  const age = t.zeit ? agoText(nowServer - t.zeit) : '';
-  const fresh = t.zeit && (nowServer - t.zeit) < 600;
   return `<div class="tile"${styleTile} data-id="${esc(t.id)}">
     <div class="tile-head">
       <div class="tile-icon"${styleIcon}>${iconSvg(t.symbol)}</div>
@@ -1799,7 +1740,6 @@ function tileHtml(t, nowServer){
         <div class="tile-topic" title="${esc(t.topic)}">${esc(t.topic || '-')}</div></div>
     </div>
     <div class="tile-body">${valueHtml}${chips ? `<div class="tile-chips">${chips}</div>` : ''}</div>
-    <div class="tile-foot"><span class="status-dot ${t.zeit ? (fresh ? 'online' : 'idle') : ''}"></span><span>${t.zeit ? esc(age) : 'wartet'}</span></div>
   </div>`;
 }
 
@@ -1820,10 +1760,6 @@ function renderTiles(){
 function renderBroker(){
   if(!STATE) return;
   const b = STATE.broker;
-  const dot = document.getElementById('brokerDot');
-  dot.className = 'status-dot ' + (b.verbunden ? 'online' : (b.eingerichtet ? '' : 'idle'));
-  document.getElementById('brokerText').textContent = b.verbunden ? b.status.replace('Verbunden mit ', 'Broker ') : (b.eingerichtet ? b.status : 'Kein Broker eingerichtet');
-  document.getElementById('brokerPill').title = b.status;
   const line = document.getElementById('brokerStatusLine');
   line.textContent = b.status;
   line.className = 'msg ' + (b.verbunden ? 'ok' : (b.eingerichtet ? 'err' : ''));
@@ -1834,13 +1770,12 @@ async function refresh(){
   try{
     const s = await fetch('/api/state', {cache:'no-store'}).then(r => r.json());
     STATE = s; STATE_AT = Date.now();
+    document.getElementById('offlineNote').classList.remove('show');
     setTitle(s.titel);
     renderBroker();
     if(!settingsMode) renderTiles();
   }catch(e){
-    const dot = document.getElementById('brokerDot');
-    dot.className = 'status-dot';
-    document.getElementById('brokerText').textContent = 'Dashboard nicht erreichbar';
+    document.getElementById('offlineNote').classList.add('show');
   }
 }
 
@@ -2217,11 +2152,9 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 (async function init(){
-  setSize(lsGet('kachelGroesse', 'm'));
   try{ await loadConfig(); }catch(e){}
   await refresh();
   setInterval(refresh, 1500);
-  setInterval(() => { if(!settingsMode && STATE) renderTiles(); }, 1000);
 })();
 </script>
 </body>

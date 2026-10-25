@@ -4,7 +4,7 @@ Lokales Web-Dashboard, das Werte aus **MQTT-Topics als Kacheln** anzeigt – im
 dunklen, technischen Design des Drucker Dashboards MK6. Ein einziges
 Python-Skript (`app.py`), **keine Zusatzpakete**, keine Cloud.
 
-**Version: 1.0.0**
+**Version: 1.1.0**
 
 | Plattform | Lieferform | Entsteht in |
 |---|---|---|
@@ -16,12 +16,12 @@ Python-Skript (`app.py`), **keine Zusatzpakete**, keine Cloud.
 ## Funktionen
 
 - MQTT-Broker auf der Webseite eintragen (Host, Port, Benutzer/Passwort, optional TLS),
-  mit **„Verbindung testen“** und Live-Status in der Kopfzeile.
+  mit **„Verbindung testen“** und Verbindungsstatus in den Einstellungen.
 - Alle empfangenen Topics werden mitgelesen (Filter einstellbar, Standard `#`) und
   stehen im **Topic-Browser** bzw. in der **Topic-Suche** der Kachel zur Auswahl.
 - Jede Kachel zeigt den Wert eines Topics mit
   - frei wählbarer **Einheit** (W, °C, %, kWh …),
-  - **Symbol** aus 41 Logos (Waschmaschine, Trockner, Spülmaschine, Server,
+  - **Symbol** aus 42 Logos (Waschmaschine, Trockner, Spülmaschine, Server, E-Fahrrad,
     Solaranlage, Lampe, Steckdose, Batterie, Wallbox, Heizung, Wärmepumpe …),
   - optional **JSON-Feld** (z. B. `ENERGY.Power` bei Tasmota) – per Klick aus dem
     aktuellen Inhalt wählbar,
@@ -29,9 +29,9 @@ Python-Skript (`app.py`), **keine Zusatzpakete**, keine Cloud.
   - beliebig vielen **Schwellwerten**: *erreicht / überschreitet / unterschreitet /
     ist gleich / ungleich / Text enthält* → Text in wählbarer Farbe auf der Kachel
     (Kachelrahmen, Symbol und Wert färben sich mit).
-- Kacheln stehen **nebeneinander** und brechen automatisch um; Kachelgröße S / M / L
-  umschaltbar (wird je Gerät gemerkt).
-- **iPhone-tauglich**: 2–3 Kacheln pro Zeile, große Werte, keine Zoom-Sprünge in
+- Kacheln stehen **nebeneinander**: auf Rechner und iPad richtet sich die Anzahl
+  nach der Fensterbreite, auf dem iPhone sind es immer genau zwei.
+- **iPhone-tauglich**: große Werte, keine Zoom-Sprünge in
   Eingabefeldern, „Zum Home-Bildschirm“ mit eigenem App-Symbol.
 - **Port der Webseite dauerhaft änderbar** – der Server zieht sofort um, die Seite
   leitet automatisch weiter (auf dem Brume wird die Firewall-Regel mitgezogen).
@@ -45,10 +45,10 @@ Python-Skript (`app.py`), **keine Zusatzpakete**, keine Cloud.
 2. **Den kompletten Inhalt dieses Ordners** hochladen – inklusive des versteckten
    Ordners `.github/` sowie `.gitattributes`.
 3. Unter **Actions** startet „Build & Release“ automatisch (oder manuell über
-   *Run workflow*). Nach ca. 5–10 Minuten liegt unter **Releases → v1.0.0**:
-   - `MQTT-Kachel-Dashboard-v1.0.0-windows.zip`
-   - `MQTT-Kachel-Dashboard-v1.0.0-macos-arm64.zip`
-   - `MQTT-Kachel-Dashboard-v1.0.0-brume2-offline.tar.gz`
+   *Run workflow*). Nach ca. 5–10 Minuten liegt unter **Releases → v1.1.0**:
+   - `MQTT-Kachel-Dashboard-v1.1.0-windows.zip`
+   - `MQTT-Kachel-Dashboard-v1.1.0-macos-arm64.zip`
+   - `MQTT-Kachel-Dashboard-v1.1.0-brume2-offline.tar.gz`
 4. Für eine neue Version `APP_VERSION` oben in `app.py` erhöhen und pushen – es
    entsteht automatisch ein neues Release.
 
@@ -91,9 +91,9 @@ Der Brume 2 braucht **kein Internet** – das Paket enthält alle Python3-Pakete
 (.ipk für OpenWrt 21.02 / aarch64_cortex-a53).
 
 ```
-scp MQTT-Kachel-Dashboard-v1.0.0-brume2-offline.tar.gz root@<BRUME-IP>:/tmp/
+scp MQTT-Kachel-Dashboard-v1.1.0-brume2-offline.tar.gz root@<BRUME-IP>:/tmp/
 ssh root@<BRUME-IP>
-cd /tmp && tar xzf MQTT-Kachel-Dashboard-v1.0.0-brume2-offline.tar.gz
+cd /tmp && tar xzf MQTT-Kachel-Dashboard-v1.1.0-brume2-offline.tar.gz
 cd MQTT-Kachel-Dashboard-brume2 && sh install.sh
 ```
 
@@ -108,7 +108,7 @@ Der Installer
   `--ohne-firewall`),
 - zeigt am Ende die Adressen an.
 
-Optionen: `--port=8091` (nur beim ersten Installieren), `--ohne-firewall`.
+Optionen: `--port=8086` (nur beim ersten Installieren), `--ohne-firewall`.
 **Update:** neueres Paket genauso entpacken und `sh install.sh` erneut starten –
 `config.json` bleibt erhalten. **Deinstallation:**
 `sh /root/MQTT-Kachel-Dashboard-MK1/uninstall.sh` (mit `--alles` inkl. Konfiguration).
@@ -156,7 +156,7 @@ gesichert und das Programm startet mit Standardwerten.
 
 ```json
 {
-  "server": { "port": 8090, "host": "0.0.0.0", "titel": "MQTT Kacheln", "browser_oeffnen": true },
+  "server": { "port": 8085, "host": "0.0.0.0", "titel": "MQTT Kacheln", "browser_oeffnen": true },
   "broker": {
     "host": "192.168.1.10", "port": 1883, "benutzer": "", "passwort": "",
     "tls": false, "tls_zertifikat_nicht_pruefen": false,
@@ -205,6 +205,9 @@ brume2/offline-paket-bauen-*    Offline-Paket lokal bauen (Windows/Mac)
 
 ## Versionen
 
+- **1.1.0** – Standard-Port 8085; Kachelgrößen-Umschalter S/M/L entfernt (iPhone immer
+  zwei Kacheln nebeneinander, sonst nach Fensterbreite); Broker-Status nicht mehr auf der
+  Kachel-Ansicht; Symbol „E-Fahrrad“; Zeitangabe („gerade eben“) auf den Kacheln entfernt.
 - **1.0.0** – Erste Version: Kacheln mit Topic, JSON-Feld, Einheit, Faktor, Symbol und
   Schwellwert-Texten; Topic-Browser; Port per Webseite änderbar; exe/Mac-App/Brume-2-
   Offline-Paket per GitHub Actions.

@@ -32,7 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 APP_NAME = "MQTT-Kachel-Dashboard-MK1"
-APP_VERSION = "1.1.3"
+APP_VERSION = "1.2.0"
 DEFAULT_PORT = 8085
 CONFIG_FILENAME = "config.json"
 
@@ -689,6 +689,7 @@ class TopicCache:
         self.store = store
         self.lock = threading.Lock()
         self.data = {}   # topic -> (text, ts, retained, size, binary)
+        self.counts = {}  # topic -> Anzahl empfangener Nachrichten (fuer den Punkt auf der Kachel)
 
     def _tile_topics(self):
         return set(t["topic"] for t in self.store.cfg["kacheln"])
@@ -709,10 +710,15 @@ class TopicCache:
             if topic not in self.data and len(self.data) >= MAX_TOPICS and topic not in self._tile_topics():
                 return
             self.data[topic] = (text, time.time(), retained, size, binary)
+            self.counts[topic] = self.counts.get(topic, 0) + 1
 
     def get(self, topic):
         with self.lock:
             return self.data.get(topic)
+
+    def count(self, topic):
+        with self.lock:
+            return self.counts.get(topic, 0)
 
     def search(self, q, limit):
         q = (q or "").lower().strip()
@@ -836,7 +842,7 @@ def evaluate_tile(tile, cache):
     res = {
         "id": tile["id"], "name": tile["name"], "symbol": tile["symbol"], "topic": tile["topic"],
         "einheit": tile["einheit"], "wert": None, "hat_wert": False, "zeit": None,
-        "fehler": None, "treffer": [], "farbe": None,
+        "fehler": None, "treffer": [], "farbe": None, "nachrichten": 0,
     }
     if not tile["topic"]:
         res["fehler"] = "Kein Topic gewählt"
@@ -846,6 +852,7 @@ def evaluate_tile(tile, cache):
         return res
     text, ts, _retained, _size, binary = entry
     res["zeit"] = ts
+    res["nachrichten"] = cache.count(tile["topic"])
     if binary:
         res["fehler"] = text
         return res
@@ -1349,6 +1356,12 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .tile-icon svg{ width:23px; height:23px; }
   svg.ico{ fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
   .tile-titles{ min-width:0; flex:1; }
+  /* Nachrichten-Punkt: wechselt bei jeder neuen MQTT-Nachricht zwischen Gruen und Hintergrund */
+  .msg-dot{
+    width:10px; height:10px; border-radius:50%; flex-shrink:0; align-self:flex-start; margin-top:2px;
+    background:var(--panel-2); border:1px solid var(--border); transition:background .15s ease, box-shadow .15s ease;
+  }
+  .msg-dot.on{ background:var(--accent-2); border-color:var(--accent-2); box-shadow:0 0 6px var(--accent-2); }
   .tile-name{ font-size:15px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .tile-topic{
     font-family:var(--mono); font-size:11px; color:var(--text-dim); margin-top:2px;
@@ -1685,6 +1698,7 @@ let settingsMode = false;
 let editTile = null;       // Kachel im Modal
 let previewTimer = null;
 let suggestIdx = -1;
+const MSG_DOT = {};        // Kachel-ID -> {n: letzte Nachrichtenzahl, on: Punkt gruen?}
 
 function esc(s){
   return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -1717,7 +1731,14 @@ function setTitle(t){
 }
 
 /* ---------- Kachel-HTML ---------- */
-function tileHtml(t, nowServer){
+function dotOn(t){
+  const n = t.nachrichten || 0;
+  const st = MSG_DOT[t.id];
+  if(!st){ MSG_DOT[t.id] = {n, on: n % 2 === 1}; return n % 2 === 1; }
+  if(st.n !== n){ st.n = n; st.on = !st.on; }
+  return st.on;
+}
+function tileHtml(t, nowServer, dot){
   const col = t.farbe;
   const styleTile = col ? ` style="border-color:${col}99; box-shadow:0 0 0 1px ${col}33, 0 0 18px ${col}14;"` : '';
   const styleIcon = col ? ` style="color:${col}; border-color:${col}88;"` : '';
@@ -1737,6 +1758,7 @@ function tileHtml(t, nowServer){
       <div class="tile-icon"${styleIcon}>${iconSvg(t.symbol)}</div>
       <div class="tile-titles"><div class="tile-name" title="${esc(t.name)}">${esc(t.name)}</div>
         <div class="tile-topic" title="${esc(t.topic)}">${esc(t.topic || '-')}</div></div>
+      <span class="msg-dot ${dot ? 'on' : ''}" title="Wechselt bei jeder neuen MQTT-Nachricht"></span>
     </div>
     <div class="tile-body">${valueHtml}${chips ? `<div class="tile-chips">${chips}</div>` : ''}</div>
   </div>`;
@@ -1753,7 +1775,7 @@ function renderTiles(){
       <button class="btn" onclick="enterSettings()">&#9881; Einstellungen öffnen</button></div>`;
     return;
   }
-  main.innerHTML = STATE.kacheln.map(t => tileHtml(t, nowServer)).join('');
+  main.innerHTML = STATE.kacheln.map(t => tileHtml(t, nowServer, dotOn(t))).join('');
 }
 
 function renderBroker(){
@@ -2045,7 +2067,7 @@ function schedulePreview(){
     const r = await api('/api/preview', Object.assign({}, t, {name: t.name || 'Vorschau'}));
     if(r && r.id !== undefined){
       const now = (STATE ? STATE.jetzt + (Date.now() - STATE_AT) / 1000 : Date.now() / 1000);
-      document.getElementById('previewWrap').innerHTML = tileHtml(r, now);
+      document.getElementById('previewWrap').innerHTML = tileHtml(r, now, (r.nachrichten || 0) % 2 === 1);
     }
   }, 250);
 }

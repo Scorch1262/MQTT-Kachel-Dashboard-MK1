@@ -32,7 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 APP_NAME = "MQTT-Kachel-Dashboard-MK1"
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.4.0"
 DEFAULT_PORT = 8085
 CONFIG_FILENAME = "config.json"
 
@@ -290,7 +290,45 @@ def tile_topics(tile):
     for z in tile.get("zusatz_topics") or []:
         if z["topic"] and z["topic"] not in out:
             out.append(z["topic"])
+    zt = klick_zustand_topic(tile)
+    if zt and zt not in out:
+        out.append(zt)
     return out
+
+
+def klick_zustand_topic(tile):
+    """Topic, aus dem beim Umschalten der aktuelle Zustand gelesen wird."""
+    if tile.get("klick_modus") != "umschalten" or not tile.get("klick_topic"):
+        return ""
+    return tile.get("klick_zustand_topic") or tile["klick_topic"]
+
+
+def gleicher_wert(a, b):
+    na, nb = to_number(a), to_number(b)
+    if na is not None and nb is not None:
+        return abs(na - nb) < 1e-9
+    return str(a).strip().lower() == str(b).strip().lower()
+
+
+def klick_payload(tile, cache, letzte):
+    """Payload fuer einen Klick bestimmen (fest oder umschalten)."""
+    if tile.get("klick_modus") != "umschalten":
+        return tile["klick_payload"]
+    w1, w2 = tile["klick_wert_1"], tile["klick_wert_2"]
+    aktuell = None
+    entry = cache.get(klick_zustand_topic(tile))
+    if entry is not None and not entry[4]:
+        aktuell = entry[0]
+        if tile.get("klick_zustand_json"):
+            ok, val = extract_json_field(aktuell, tile["klick_zustand_json"])
+            aktuell = val if ok else None
+            if isinstance(aktuell, bool):
+                aktuell = "true" if aktuell else "false"
+    if aktuell is None:
+        aktuell = letzte.get(tile["id"])       # Fallback: zuletzt selbst gesendeter Wert
+    if aktuell is not None and gleicher_wert(aktuell, w1):
+        return w2
+    return w1
 
 
 def normalize_tile(t, keep_id=True):
@@ -334,6 +372,11 @@ def normalize_tile(t, keep_id=True):
         "klick_payload": str(t.get("klick_payload") if t.get("klick_payload") is not None else "")[:2000],
         "klick_retain": _as_bool(t.get("klick_retain"), False),
         "klick_bestaetigen": _as_bool(t.get("klick_bestaetigen"), False),
+        "klick_modus": "umschalten" if t.get("klick_modus") == "umschalten" else "fest",
+        "klick_wert_1": str(t.get("klick_wert_1") if t.get("klick_wert_1") not in (None, "") else "1")[:200],
+        "klick_wert_2": str(t.get("klick_wert_2") if t.get("klick_wert_2") not in (None, "") else "0")[:200],
+        "klick_zustand_topic": str(t.get("klick_zustand_topic") or "").strip()[:300],
+        "klick_zustand_json": str(t.get("klick_zustand_json") or "").strip()[:200],
     }
 
 
@@ -1006,6 +1049,7 @@ class App:
         self.server = None
         self.server_lock = threading.Lock()
         self.quit_event = threading.Event()
+        self.letzte_klicks = {}   # Kachel-ID -> zuletzt gesendeter Payload
 
     # --- Server-Steuerung -------------------------------------------------
     def make_server(self, port):
@@ -1271,9 +1315,12 @@ def make_handler(app):
                     return self._err("Kachel nicht gefunden", 404)
                 if not tile.get("klick_topic"):
                     return self._err("Für diese Kachel ist keine Aktion festgelegt")
-                ok, msg = app.mqtt.publish(tile["klick_topic"], tile["klick_payload"], tile["klick_retain"])
-                print("[MQTT] Kachel '%s' -> %s: %s" % (tile["name"], tile["klick_topic"], msg))
-                return self._json({"ok": ok, "meldung": msg}, 200 if ok else 503)
+                payload = klick_payload(tile, app.cache, app.letzte_klicks)
+                ok, msg = app.mqtt.publish(tile["klick_topic"], payload, tile["klick_retain"])
+                if ok:
+                    app.letzte_klicks[tile["id"]] = payload
+                print("[MQTT] Kachel '%s' -> %s = %s: %s" % (tile["name"], tile["klick_topic"], payload, msg))
+                return self._json({"ok": ok, "meldung": msg, "payload": payload}, 200 if ok else 503)
 
             if p == "/api/preview":
                 tile = normalize_tile(data, keep_id=True)
@@ -1766,11 +1813,25 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
     <hr class="sep">
     <label class="lbl">Aktion beim Antippen der Kachel (optional)</label>
-    <div class="hint-text">Beim Antippen der Kachel wird der Payload an dieses Topic gesendet,
-      z. B. <b>cmnd/steckdose/POWER</b> mit <b>TOGGLE</b>. Topic leer lassen = keine Aktion.</div>
+    <div class="hint-text">Beim Antippen der Kachel wird eine Nachricht an dieses Topic gesendet. Topic leer lassen = keine Aktion.</div>
     <div class="form-grid">
       <div class="field"><label class="lbl">Topic</label><input type="text" id="tKTopic" list="topicDatalist" placeholder="z. B. cmnd/steckdose/POWER" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
-      <div class="field"><label class="lbl">Payload</label><input type="text" id="tKPayload" placeholder="z. B. TOGGLE" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+      <div class="field"><label class="lbl">Art der Aktion</label>
+        <select id="tKMode" onchange="updateKlickFelder()">
+          <option value="fest">Immer denselben Payload senden</option>
+          <option value="umschalten">Umschalten zwischen zwei Werten</option>
+        </select></div>
+      <div class="field full" id="kFest"><label class="lbl">Payload</label><input type="text" id="tKPayload" placeholder="z. B. TOGGLE" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+      <div class="full" id="kUmschalten" style="display:none;">
+        <div class="hint-text">Ist der aktuelle Wert = Wert 1, wird Wert 2 gesendet, sonst Wert 1 – bei jedem Antippen im Wechsel
+          (z. B. 1 → 0 → 1). Der aktuelle Wert wird aus dem Zustands-Topic gelesen (leer = Aktions-Topic).</div>
+        <div class="form-grid keep2">
+          <div class="field"><label class="lbl">Wert 1</label><input type="text" id="tKW1" placeholder="1" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+          <div class="field"><label class="lbl">Wert 2</label><input type="text" id="tKW2" placeholder="0" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+          <div class="field"><label class="lbl">Zustands-Topic (optional)</label><input type="text" id="tKZTopic" list="topicDatalist" placeholder="leer = Aktions-Topic" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+          <div class="field"><label class="lbl">JSON-Feld (optional)</label><input type="text" id="tKZJson" placeholder="z. B. state" autocapitalize="off" spellcheck="false"></div>
+        </div>
+      </div>
       <div class="full">
         <div class="checkbox-row"><input type="checkbox" id="tKConfirm"><label for="tKConfirm">Vor dem Senden nachfragen</label></div>
         <div class="checkbox-row"><input type="checkbox" id="tKRetain"><label for="tKRetain">Als „retained“ senden</label></div>
@@ -1872,8 +1933,7 @@ function tileHtml(t, nowServer, dot, vorschau){
   return `<div class="tile${t.klickbar ? ' clickable' : ''}"${styleTile}${klick} data-id="${esc(t.id)}">
     <div class="tile-head">
       <div class="tile-icon"${styleIcon}>${iconSvg(t.symbol)}</div>
-      <div class="tile-titles"><div class="tile-name" title="${esc(t.name)}">${esc(t.name)}</div>
-        <div class="tile-topic" title="${esc(t.topic)}">${esc(t.topic || '-')}</div></div>
+      <div class="tile-titles"><div class="tile-name" title="${esc(t.name)}">${esc(t.name)}</div></div>
       ${t.klickbar ? TAP_SVG : ''}<span class="msg-dot ${dot ? 'on' : ''}" title="Wechselt bei jeder neuen MQTT-Nachricht"></span>
     </div>
     <div class="tile-body">${valueHtml}${chips ? `<div class="tile-chips">${chips}</div>` : ''}</div>
@@ -1934,7 +1994,7 @@ async function tileClick(id){
   klickBusy = true;
   try{
     const r = await api('/api/tiles/klick', {id});
-    toast(r.ok ? (t.name + ': gesendet') : (r.meldung || r.fehler || 'Fehler'), !!r.ok);
+    toast(r.ok ? (t.name + ': ' + (r.payload !== undefined && r.payload !== '' ? r.payload + ' ' : '') + 'gesendet') : (r.meldung || r.fehler || 'Fehler'), !!r.ok);
   }catch(e){ toast('Dashboard nicht erreichbar', false); }
   klickBusy = false;
   setTimeout(refresh, 400);
@@ -1996,7 +2056,7 @@ function renderManageList(){
   if(!tiles.length){ el.innerHTML = '<div class="t-empty">Noch keine Kacheln angelegt.</div>'; return; }
   el.innerHTML = tiles.map((t, i) => `<div class="manage-row">
       <div class="manage-icon">${iconSvg(t.symbol)}</div>
-      <div class="manage-info">${esc(t.name)}<div class="manage-sub">${esc(t.topic || '(kein Topic)')}${t.json_feld ? ' &rarr; ' + esc(t.json_feld) : ''}${t.einheit ? ' &middot; ' + esc(t.einheit) : ''}${t.schwellwerte.length ? ' &middot; ' + t.schwellwerte.length + ' Schwellwert(e)' : ''}${(t.zusatz_topics || []).length ? ' &middot; +' + t.zusatz_topics.length + ' Topic(s)' : ''}${t.klick_topic ? ' &middot; Aktion: ' + esc(t.klick_topic) : ''}</div></div>
+      <div class="manage-info">${esc(t.name)}<div class="manage-sub">${esc(t.topic || '(kein Topic)')}${t.json_feld ? ' &rarr; ' + esc(t.json_feld) : ''}${t.einheit ? ' &middot; ' + esc(t.einheit) : ''}${t.schwellwerte.length ? ' &middot; ' + t.schwellwerte.length + ' Schwellwert(e)' : ''}${(t.zusatz_topics || []).length ? ' &middot; +' + t.zusatz_topics.length + ' Topic(s)' : ''}${t.klick_topic ? ' &middot; ' + (t.klick_modus === 'umschalten' ? 'Umschalten: ' : 'Aktion: ') + esc(t.klick_topic) : ''}</div></div>
       <div class="manage-actions">
         <button class="btn-mini" onclick="moveTile(${i},-1)" ${i === 0 ? 'disabled' : ''} title="nach oben">&uarr;</button>
         <button class="btn-mini" onclick="moveTile(${i},1)" ${i === tiles.length - 1 ? 'disabled' : ''} title="nach unten">&darr;</button>
@@ -2096,7 +2156,8 @@ function loadBrowser(){
 /* ---------- Kachel-Modal ---------- */
 function blankTile(){
   return {id:'', name:'', topic:'', json_feld:'', einheit:'', nachkommastellen:-1, faktor:1, symbol:'info', treffer_modus:'alle', schwellwerte:[],
-          zusatz_topics:[], klick_topic:'', klick_payload:'', klick_retain:false, klick_bestaetigen:false};
+          zusatz_topics:[], klick_topic:'', klick_payload:'', klick_retain:false, klick_bestaetigen:false,
+          klick_modus:'fest', klick_wert_1:'1', klick_wert_2:'0', klick_zustand_topic:'', klick_zustand_json:''};
 }
 async function openTileModal(id, topic){
   if(!CFG) await loadConfig();
@@ -2116,6 +2177,12 @@ async function openTileModal(id, topic){
   document.getElementById('tMode').value = editTile.treffer_modus;
   document.getElementById('tKTopic').value = editTile.klick_topic;
   document.getElementById('tKPayload').value = editTile.klick_payload;
+  document.getElementById('tKMode').value = editTile.klick_modus;
+  document.getElementById('tKW1').value = editTile.klick_wert_1;
+  document.getElementById('tKW2').value = editTile.klick_wert_2;
+  document.getElementById('tKZTopic').value = editTile.klick_zustand_topic;
+  document.getElementById('tKZJson').value = editTile.klick_zustand_json;
+  updateKlickFelder();
   document.getElementById('tKConfirm').checked = !!editTile.klick_bestaetigen;
   document.getElementById('tKRetain').checked = !!editTile.klick_retain;
   document.getElementById('tileMsg').textContent = '';
@@ -2150,6 +2217,11 @@ function readTileForm(){
   }));
   editTile.klick_topic = document.getElementById('tKTopic').value.trim();
   editTile.klick_payload = document.getElementById('tKPayload').value;
+  editTile.klick_modus = document.getElementById('tKMode').value;
+  editTile.klick_wert_1 = document.getElementById('tKW1').value;
+  editTile.klick_wert_2 = document.getElementById('tKW2').value;
+  editTile.klick_zustand_topic = document.getElementById('tKZTopic').value.trim();
+  editTile.klick_zustand_json = document.getElementById('tKZJson').value.trim();
   editTile.klick_bestaetigen = document.getElementById('tKConfirm').checked;
   editTile.klick_retain = document.getElementById('tKRetain').checked;
   return editTile;
@@ -2270,6 +2342,11 @@ function removeZusatz(i){
   editTile.zusatz_topics.splice(i, 1);
   renderThresholds();
   schedulePreview();
+}
+function updateKlickFelder(){
+  const um = document.getElementById('tKMode').value === 'umschalten';
+  document.getElementById('kFest').style.display = um ? 'none' : '';
+  document.getElementById('kUmschalten').style.display = um ? '' : 'none';
 }
 async function fillTopicDatalist(){
   try{

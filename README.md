@@ -4,7 +4,7 @@ Lokales Web-Dashboard, das Werte aus **MQTT-Topics als Kacheln** anzeigt – im
 dunklen, technischen Design des Drucker Dashboards MK6. Ein einziges
 Python-Skript (`app.py`), **keine Zusatzpakete**, keine Cloud.
 
-**Version: 1.3.0**
+**Version: 1.4.0**
 
 ![Vorschau: Kachel-Ansicht am Rechner und auf dem iPhone](docs/vorschau.png)
 
@@ -35,8 +35,9 @@ Python-Skript (`app.py`), **keine Zusatzpakete**, keine Cloud.
   (`stat/steckdose/POWER`) – angezeigt werden die Texte der zutreffenden Bedingungen,
   etwa „Eingeschaltet“ / „Ausgeschaltet“.
 - **Aktion beim Antippen:** je Kachel ein Topic + Payload (z. B. `cmnd/steckdose/POWER` /
-  `TOGGLE`), optional mit Rückfrage und als „retained“. Kacheln mit Aktion tragen ein
-  kleines Blitz-Symbol.
+  `TOGGLE`), optional mit Rückfrage und als „retained“. Alternativ **Umschalten**: bei jedem
+  Antippen wird abwechselnd Wert 1 / Wert 2 gesendet (z. B. 1 → 0 → 1), passend zum aktuellen
+  Wert des Topics. Kacheln mit Aktion tragen ein kleines Blitz-Symbol.
 - Ein kleiner **Punkt oben rechts** auf jeder Kachel wechselt bei jeder neuen MQTT-Nachricht
   des Topics zwischen Grün und Hintergrundfarbe – auch wenn der Wert gleich bleibt.
 - Kacheln stehen **nebeneinander**: auf Rechner und iPad richtet sich die Anzahl
@@ -98,9 +99,9 @@ direkt neben der App.
 ## 4. GL.iNet Brume 2 – Zip kopieren und installieren (ohne GitHub)
 
 ```
-scp MQTT-Kachel-Dashboard-MK1-v1.3.0.zip root@<BRUME-IP>:/tmp/
+scp MQTT-Kachel-Dashboard-MK1-v1.4.0.zip root@<BRUME-IP>:/tmp/
 ssh root@<BRUME-IP>
-cd /tmp && unzip -o MQTT-Kachel-Dashboard-MK1-v1.3.0.zip
+cd /tmp && unzip -o MQTT-Kachel-Dashboard-MK1-v1.4.0.zip
 sh MQTT-Kachel-Dashboard-MK1/install.sh
 ```
 
@@ -198,7 +199,9 @@ gesichert und das Programm startet mit Standardwerten.
                             { "vergleich": "==", "wert": "OFF", "text": "Ausgeschaltet", "farbe": "grau" } ] }
       ],
       "klick_topic": "cmnd/trockner/POWER", "klick_payload": "TOGGLE",
-      "klick_retain": false, "klick_bestaetigen": true
+      "klick_retain": false, "klick_bestaetigen": true,
+      "klick_modus": "fest", "klick_wert_1": "1", "klick_wert_2": "0",
+      "klick_zustand_topic": "", "klick_zustand_json": ""
     }
   ]
 }
@@ -207,6 +210,8 @@ gesichert und das Programm startet mit Standardwerten.
 - `vergleich`: `>=`, `>`, `<=`, `<`, `==`, `!=`, `enthaelt`
 - `farbe`: `gruen`, `orange`, `rot`, `blau`, `gelb`, `lila`, `grau`
 - `nachkommastellen`: `-1` = automatisch
+- `klick_modus`: `fest` (immer `klick_payload`) oder `umschalten` (abwechselnd `klick_wert_1` /
+  `klick_wert_2`; Zustand aus `klick_zustand_topic`, leer = `klick_topic`)
 - Das Passwort steht im Klartext in der Datei – `config.json` daher nicht weitergeben
   (ist per `.gitignore` vom Repo ausgeschlossen).
 
@@ -238,6 +243,8 @@ brume2/offline-paket-bauen-*    Offline-Paket lokal bauen (Windows/Mac)
 
 ## Versionen
 
+- **1.4.0** – Topic-Namen werden auf den Kacheln nicht mehr angezeigt; Aktion „Umschalten
+  zwischen zwei Werten“ (Zustand aus Aktions- oder eigenem Zustands-Topic, optional JSON-Feld).
 - **1.3.0** – Weitere Topics je Kachel mit eigenen Bedingungen/Texten (z. B. Ein/Aus-Anzeige);
   Aktion beim Antippen einer Kachel (Topic + Payload, optional Rückfrage/retained).
 - **1.2.0** – Nachrichten-Punkt auf jeder Kachel (wechselt bei jeder neuen MQTT-Nachricht

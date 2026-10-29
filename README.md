@@ -4,7 +4,7 @@ Lokales Web-Dashboard, das Werte aus **MQTT-Topics als Kacheln** anzeigt – im
 dunklen, technischen Design des Drucker Dashboards MK6. Ein einziges
 Python-Skript (`app.py`), **keine Zusatzpakete**, keine Cloud.
 
-**Version: 1.2.0**
+**Version: 1.3.0**
 
 ![Vorschau: Kachel-Ansicht am Rechner und auf dem iPhone](docs/vorschau.png)
 
@@ -31,6 +31,12 @@ Python-Skript (`app.py`), **keine Zusatzpakete**, keine Cloud.
   - beliebig vielen **Schwellwerten**: *erreicht / überschreitet / unterschreitet /
     ist gleich / ungleich / Text enthält* → Text in wählbarer Farbe auf der Kachel
     (Kachelrahmen, Symbol und Wert färben sich mit).
+- **Weitere Topics je Kachel:** z. B. neben der Leistung zusätzlich den Schaltzustand
+  (`stat/steckdose/POWER`) – angezeigt werden die Texte der zutreffenden Bedingungen,
+  etwa „Eingeschaltet“ / „Ausgeschaltet“.
+- **Aktion beim Antippen:** je Kachel ein Topic + Payload (z. B. `cmnd/steckdose/POWER` /
+  `TOGGLE`), optional mit Rückfrage und als „retained“. Kacheln mit Aktion tragen ein
+  kleines Blitz-Symbol.
 - Ein kleiner **Punkt oben rechts** auf jeder Kachel wechselt bei jeder neuen MQTT-Nachricht
   des Topics zwischen Grün und Hintergrundfarbe – auch wenn der Wert gleich bleibt.
 - Kacheln stehen **nebeneinander**: auf Rechner und iPad richtet sich die Anzahl
@@ -92,9 +98,9 @@ direkt neben der App.
 ## 4. GL.iNet Brume 2 – Zip kopieren und installieren (ohne GitHub)
 
 ```
-scp MQTT-Kachel-Dashboard-MK1-v1.2.0.zip root@<BRUME-IP>:/tmp/
+scp MQTT-Kachel-Dashboard-MK1-v1.3.0.zip root@<BRUME-IP>:/tmp/
 ssh root@<BRUME-IP>
-cd /tmp && unzip -o MQTT-Kachel-Dashboard-MK1-v1.2.0.zip
+cd /tmp && unzip -o MQTT-Kachel-Dashboard-MK1-v1.3.0.zip
 sh MQTT-Kachel-Dashboard-MK1/install.sh
 ```
 
@@ -185,7 +191,14 @@ gesichert und das Programm startet mit Standardwerten.
       "id": "k1a2b3c4d", "name": "Trockner", "topic": "tele/trockner/SENSOR",
       "json_feld": "ENERGY.Power", "einheit": "W", "nachkommastellen": 0, "faktor": 1.0,
       "symbol": "trockner", "treffer_modus": "alle",
-      "schwellwerte": [ { "vergleich": ">", "wert": "100", "text": "Trocknet", "farbe": "orange" } ]
+      "schwellwerte": [ { "vergleich": ">", "wert": "100", "text": "Trocknet", "farbe": "orange" } ],
+      "zusatz_topics": [
+        { "topic": "stat/trockner/POWER", "json_feld": "", "treffer_modus": "erster",
+          "schwellwerte": [ { "vergleich": "==", "wert": "ON", "text": "Eingeschaltet", "farbe": "gruen" },
+                            { "vergleich": "==", "wert": "OFF", "text": "Ausgeschaltet", "farbe": "grau" } ] }
+      ],
+      "klick_topic": "cmnd/trockner/POWER", "klick_payload": "TOGGLE",
+      "klick_retain": false, "klick_bestaetigen": true
     }
   ]
 }
@@ -225,6 +238,8 @@ brume2/offline-paket-bauen-*    Offline-Paket lokal bauen (Windows/Mac)
 
 ## Versionen
 
+- **1.3.0** – Weitere Topics je Kachel mit eigenen Bedingungen/Texten (z. B. Ein/Aus-Anzeige);
+  Aktion beim Antippen einer Kachel (Topic + Payload, optional Rückfrage/retained).
 - **1.2.0** – Nachrichten-Punkt auf jeder Kachel (wechselt bei jeder neuen MQTT-Nachricht
   zwischen Grün und Hintergrundfarbe).
 - **1.1.3** – Installer erkennt belegten Port auf dem Brume und weicht automatisch aus,

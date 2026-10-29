@@ -32,7 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 APP_NAME = "MQTT-Kachel-Dashboard-MK1"
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 DEFAULT_PORT = 8085
 CONFIG_FILENAME = "config.json"
 
@@ -264,16 +264,9 @@ def _as_float(v, default):
         return default
 
 
-def normalize_tile(t, keep_id=True):
-    t = t if isinstance(t, dict) else {}
-    tid = str(t.get("id") or "").strip() if keep_id else ""
-    if not tid or not all(c.isalnum() or c in "-_" for c in tid):
-        tid = _gen_id()
-    symbol = str(t.get("symbol") or "info")
-    if symbol not in ICON_KEYS:
-        symbol = "info"
+def normalize_schwellwerte(liste):
     schwellen = []
-    for s in (t.get("schwellwerte") or []):
+    for s in (liste or []):
         if not isinstance(s, dict):
             continue
         v = str(s.get("vergleich") or ">=")
@@ -288,9 +281,43 @@ def normalize_tile(t, keep_id=True):
             "text": str(s.get("text") or "").strip()[:80],
             "farbe": farbe,
         })
+    return schwellen[:20]
+
+
+def tile_topics(tile):
+    """Alle Topics, die eine Kachel abonniert (Haupt-Topic + weitere Topics)."""
+    out = [tile["topic"]] if tile.get("topic") else []
+    for z in tile.get("zusatz_topics") or []:
+        if z["topic"] and z["topic"] not in out:
+            out.append(z["topic"])
+    return out
+
+
+def normalize_tile(t, keep_id=True):
+    t = t if isinstance(t, dict) else {}
+    tid = str(t.get("id") or "").strip() if keep_id else ""
+    if not tid or not all(c.isalnum() or c in "-_" for c in tid):
+        tid = _gen_id()
+    symbol = str(t.get("symbol") or "info")
+    if symbol not in ICON_KEYS:
+        symbol = "info"
     modus = str(t.get("treffer_modus") or "alle")
     if modus not in ("alle", "erster"):
         modus = "alle"
+    zusatz = []
+    for z in (t.get("zusatz_topics") or []):
+        if not isinstance(z, dict):
+            continue
+        ztopic = str(z.get("topic") or "").strip()[:300]
+        if not ztopic:
+            continue
+        zmodus = str(z.get("treffer_modus") or "erster")
+        zusatz.append({
+            "topic": ztopic,
+            "json_feld": str(z.get("json_feld") or "").strip()[:200],
+            "treffer_modus": zmodus if zmodus in ("alle", "erster") else "erster",
+            "schwellwerte": normalize_schwellwerte(z.get("schwellwerte")),
+        })
     return {
         "id": tid,
         "name": str(t.get("name") or "").strip()[:60] or "Neue Kachel",
@@ -301,7 +328,12 @@ def normalize_tile(t, keep_id=True):
         "faktor": _as_float(t.get("faktor"), 1.0) or 1.0,
         "symbol": symbol,
         "treffer_modus": modus,
-        "schwellwerte": schwellen[:20],
+        "schwellwerte": normalize_schwellwerte(t.get("schwellwerte")),
+        "zusatz_topics": zusatz[:8],
+        "klick_topic": str(t.get("klick_topic") or "").strip()[:300],
+        "klick_payload": str(t.get("klick_payload") if t.get("klick_payload") is not None else "")[:2000],
+        "klick_retain": _as_bool(t.get("klick_retain"), False),
+        "klick_bestaetigen": _as_bool(t.get("klick_bestaetigen"), False),
     }
 
 
@@ -554,6 +586,19 @@ class MqttClient:
             pass
         self.restart()
 
+    def publish(self, topic, payload, retain=False):
+        """Nachricht senden (QoS 0). Gibt (ok, meldung) zurueck."""
+        if not self.connected or self.sock is None:
+            return False, "Broker nicht verbunden"
+        if not topic or any(c in topic for c in "+#"):
+            return False, "Ungültiges Topic"
+        data = payload.encode("utf-8") if isinstance(payload, str) else bytes(payload)
+        try:
+            self._send(_mqtt_packet(0x30 | (0x01 if retain else 0x00), _mqtt_str(topic) + data))
+            return True, "Gesendet"
+        except Exception as e:
+            return False, "Senden fehlgeschlagen: %s" % e
+
     def _close_socket(self):
         s = self.sock
         if s is not None:
@@ -578,8 +623,9 @@ class MqttClient:
         cfg = self.store.snapshot()
         f = [cfg["broker"]["topic_filter"] or "#"]
         for t in cfg["kacheln"]:
-            if t["topic"] and t["topic"] not in f:
-                f.append(t["topic"])
+            for tp in tile_topics(t):
+                if tp not in f:
+                    f.append(tp)
         return f
 
     def ensure_subscriptions(self):
@@ -692,7 +738,10 @@ class TopicCache:
         self.counts = {}  # topic -> Anzahl empfangener Nachrichten (fuer den Punkt auf der Kachel)
 
     def _tile_topics(self):
-        return set(t["topic"] for t in self.store.cfg["kacheln"])
+        out = set()
+        for t in self.store.cfg["kacheln"]:
+            out.update(tile_topics(t))
+        return out
 
     def update(self, topic, payload, retained):
         size = len(payload)
@@ -838,30 +887,23 @@ def compare(op, value_num, value_text, ref):
     return False
 
 
-def evaluate_tile(tile, cache):
-    res = {
-        "id": tile["id"], "name": tile["name"], "symbol": tile["symbol"], "topic": tile["topic"],
-        "einheit": tile["einheit"], "wert": None, "hat_wert": False, "zeit": None,
-        "fehler": None, "treffer": [], "farbe": None, "nachrichten": 0,
-    }
-    if not tile["topic"]:
-        res["fehler"] = "Kein Topic gewählt"
-        return res
-    entry = cache.get(tile["topic"])
+def werte_topic(cache, topic, json_feld, faktor, nachkommastellen, schwellwerte, modus):
+    """Wert eines Topics holen, formatieren und Schwellwerte pruefen."""
+    out = {"wert": None, "hat_wert": False, "zeit": None, "fehler": None, "treffer": []}
+    entry = cache.get(topic)
     if entry is None:
-        return res
+        return out
     text, ts, _retained, _size, binary = entry
-    res["zeit"] = ts
-    res["nachrichten"] = cache.count(tile["topic"])
+    out["zeit"] = ts
     if binary:
-        res["fehler"] = text
-        return res
+        out["fehler"] = text
+        return out
     raw = text
-    if tile["json_feld"]:
-        ok, val = extract_json_field(text, tile["json_feld"])
+    if json_feld:
+        ok, val = extract_json_field(text, json_feld)
         if not ok:
-            res["fehler"] = val
-            return res
+            out["fehler"] = val
+            return out
         raw = val
     num = to_number(raw)
     if isinstance(raw, bool):
@@ -873,19 +915,41 @@ def evaluate_tile(tile, cache):
     else:
         vtext = str(raw).strip()
     if num is not None:
-        num = num * (tile["faktor"] or 1.0)
-        shown = format_number(num, tile["nachkommastellen"])
+        num = num * (faktor or 1.0)
+        shown = format_number(num, nachkommastellen)
         cmp_text = shown
     else:
         shown = vtext if len(vtext) <= 60 else vtext[:57] + "..."
         cmp_text = vtext
-    res["wert"] = shown
-    res["hat_wert"] = True
-    for s in tile["schwellwerte"]:
+    out["wert"] = shown
+    out["hat_wert"] = True
+    for s in schwellwerte:
         if compare(s["vergleich"], num, cmp_text, s["wert"]):
-            res["treffer"].append({"text": s["text"], "farbe": FARBEN[s["farbe"]][1]})
-            if tile["treffer_modus"] == "erster":
+            out["treffer"].append({"text": s["text"], "farbe": FARBEN[s["farbe"]][1]})
+            if modus == "erster":
                 break
+    return out
+
+
+def evaluate_tile(tile, cache):
+    res = {
+        "id": tile["id"], "name": tile["name"], "symbol": tile["symbol"], "topic": tile["topic"],
+        "einheit": tile["einheit"], "wert": None, "hat_wert": False, "zeit": None,
+        "fehler": None, "treffer": [], "farbe": None, "nachrichten": 0,
+        "zusatz": [], "klickbar": bool(tile.get("klick_topic")),
+        "bestaetigen": bool(tile.get("klick_bestaetigen")),
+    }
+    # weitere Topics: nur die Texte der zutreffenden Schwellwerte
+    for z in tile.get("zusatz_topics") or []:
+        zr = werte_topic(cache, z["topic"], z["json_feld"], 1.0, -1, z["schwellwerte"], z["treffer_modus"])
+        res["zusatz"].extend(m for m in zr["treffer"] if m["text"])
+    if not tile["topic"]:
+        res["fehler"] = "Kein Topic gewählt"
+        return res
+    r = werte_topic(cache, tile["topic"], tile["json_feld"], tile["faktor"], tile["nachkommastellen"],
+                    tile["schwellwerte"], tile["treffer_modus"])
+    res.update(r)
+    res["nachrichten"] = cache.count(tile["topic"])
     if res["treffer"]:
         res["farbe"] = res["treffer"][0]["farbe"]
     return res
@@ -1200,6 +1264,17 @@ def make_handler(app):
                     app.store.save()
                 return self._json({"ok": True})
 
+            if p == "/api/tiles/klick":
+                tid = str(data.get("id") or "")
+                tile = next((t for t in app.store.snapshot()["kacheln"] if t["id"] == tid), None)
+                if tile is None:
+                    return self._err("Kachel nicht gefunden", 404)
+                if not tile.get("klick_topic"):
+                    return self._err("Für diese Kachel ist keine Aktion festgelegt")
+                ok, msg = app.mqtt.publish(tile["klick_topic"], tile["klick_payload"], tile["klick_retain"])
+                print("[MQTT] Kachel '%s' -> %s: %s" % (tile["name"], tile["klick_topic"], msg))
+                return self._json({"ok": ok, "meldung": msg}, 200 if ok else 503)
+
             if p == "/api/preview":
                 tile = normalize_tile(data, keep_id=True)
                 return self._json(evaluate_tile(tile, app.cache))
@@ -1343,6 +1418,22 @@ INDEX_HTML = r"""<!DOCTYPE html>
     overflow:hidden; display:flex; flex-direction:column; container-type:inline-size;
     transition:border-color .25s ease, box-shadow .25s ease;
   }
+  .tile.clickable{ cursor:pointer; -webkit-tap-highlight-color:transparent; user-select:none; -webkit-user-select:none; }
+  .tile.clickable:hover{ border-color:#3a4250; }
+  .tile.clickable:active{ transform:scale(.985); }
+  .tap-ico{ width:14px; height:14px; color:var(--text-dim); flex-shrink:0; align-self:flex-start; margin-top:0; }
+  .toast{
+    position:fixed; left:50%; bottom:max(24px, env(safe-area-inset-bottom)); transform:translateX(-50%) translateY(20px);
+    background:var(--panel-2); border:1px solid var(--accent-2); color:var(--text); border-radius:8px;
+    padding:10px 16px; font-family:var(--mono); font-size:12.5px; opacity:0; pointer-events:none;
+    transition:opacity .2s ease, transform .2s ease; z-index:80; max-width:calc(100vw - 32px); text-align:center;
+  }
+  .toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
+  .toast.err{ border-color:var(--danger); color:var(--danger); }
+  .zusatz-block{ border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:10px; background:#0f1216; }
+  .zusatz-head{ display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
+  .zusatz-head .lbl{ margin:0; }
+  .z-current{ margin:-4px 0 10px; font-family:var(--mono); word-break:break-all; }
   .tile-head{
     display:flex; align-items:center; gap:12px; padding:14px 16px;
     border-bottom:1px solid var(--border); background:var(--panel-2); min-width:0;
@@ -1667,6 +1758,27 @@ INDEX_HTML = r"""<!DOCTYPE html>
     </div>
 
     <hr class="sep">
+    <label class="lbl">Weitere Topics (Anzeige-Texte)</label>
+    <div class="hint-text">Zusätzliche Topics für diese Kachel, z. B. ein Schaltzustand (ON/OFF). Auf der Kachel erscheinen
+      nur die Texte der zutreffenden Bedingungen – etwa „Eingeschaltet“ neben dem Leistungswert.</div>
+    <div id="zusatzList"></div>
+    <button class="btn-mini" onclick="addZusatz()">+ Weiteres Topic</button>
+
+    <hr class="sep">
+    <label class="lbl">Aktion beim Antippen der Kachel (optional)</label>
+    <div class="hint-text">Beim Antippen der Kachel wird der Payload an dieses Topic gesendet,
+      z. B. <b>cmnd/steckdose/POWER</b> mit <b>TOGGLE</b>. Topic leer lassen = keine Aktion.</div>
+    <div class="form-grid">
+      <div class="field"><label class="lbl">Topic</label><input type="text" id="tKTopic" list="topicDatalist" placeholder="z. B. cmnd/steckdose/POWER" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+      <div class="field"><label class="lbl">Payload</label><input type="text" id="tKPayload" placeholder="z. B. TOGGLE" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+      <div class="full">
+        <div class="checkbox-row"><input type="checkbox" id="tKConfirm"><label for="tKConfirm">Vor dem Senden nachfragen</label></div>
+        <div class="checkbox-row"><input type="checkbox" id="tKRetain"><label for="tKRetain">Als „retained“ senden</label></div>
+      </div>
+    </div>
+    <datalist id="topicDatalist"></datalist>
+
+    <hr class="sep">
     <label class="lbl">Vorschau</label>
     <div class="preview-wrap" id="previewWrap"></div>
 
@@ -1677,6 +1789,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
     <div class="msg err" id="tileMsg" style="text-align:right; margin-top:8px;"></div>
   </div>
 </div>
+
+<div class="toast" id="toast"></div>
 
 <!-- Bestaetigung -->
 <div class="modal-backdrop" id="confirmModal">
@@ -1738,7 +1852,8 @@ function dotOn(t){
   if(st.n !== n){ st.n = n; st.on = !st.on; }
   return st.on;
 }
-function tileHtml(t, nowServer, dot){
+const TAP_SVG = '<svg class="ico tap-ico" viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z"/></svg>';
+function tileHtml(t, nowServer, dot, vorschau){
   const col = t.farbe;
   const styleTile = col ? ` style="border-color:${col}99; box-shadow:0 0 0 1px ${col}33, 0 0 18px ${col}14;"` : '';
   const styleIcon = col ? ` style="color:${col}; border-color:${col}88;"` : '';
@@ -1751,14 +1866,15 @@ function tileHtml(t, nowServer, dot){
     const vstyle = col ? ` style="color:${col}"` : '';
     valueHtml = `<div class="tile-value"${vstyle}>${esc(t.wert)}${t.einheit ? `<span class="tile-unit">${esc(t.einheit)}</span>` : ''}</div>`;
   }
-  const chips = (t.treffer || []).filter(m => m.text).map(m =>
+  const chips = (t.treffer || []).concat(t.zusatz || []).filter(m => m.text).map(m =>
     `<span class="chip" style="color:${m.farbe}" title="${esc(m.text)}">${esc(m.text)}</span>`).join('');
-  return `<div class="tile"${styleTile} data-id="${esc(t.id)}">
+  const klick = t.klickbar && !vorschau ? ` onclick="tileClick('${esc(t.id)}')" title="Antippen sendet die festgelegte MQTT-Nachricht"` : '';
+  return `<div class="tile${t.klickbar ? ' clickable' : ''}"${styleTile}${klick} data-id="${esc(t.id)}">
     <div class="tile-head">
       <div class="tile-icon"${styleIcon}>${iconSvg(t.symbol)}</div>
       <div class="tile-titles"><div class="tile-name" title="${esc(t.name)}">${esc(t.name)}</div>
         <div class="tile-topic" title="${esc(t.topic)}">${esc(t.topic || '-')}</div></div>
-      <span class="msg-dot ${dot ? 'on' : ''}" title="Wechselt bei jeder neuen MQTT-Nachricht"></span>
+      ${t.klickbar ? TAP_SVG : ''}<span class="msg-dot ${dot ? 'on' : ''}" title="Wechselt bei jeder neuen MQTT-Nachricht"></span>
     </div>
     <div class="tile-body">${valueHtml}${chips ? `<div class="tile-chips">${chips}</div>` : ''}</div>
   </div>`;
@@ -1798,6 +1914,30 @@ async function refresh(){
   }catch(e){
     document.getElementById('offlineNote').classList.add('show');
   }
+}
+
+/* ---------- Antippen einer Kachel ---------- */
+let toastTimer = null;
+function toast(text, ok){
+  const el = document.getElementById('toast');
+  el.textContent = text;
+  el.className = 'toast show' + (ok ? '' : ' err');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.className = 'toast' + (ok ? '' : ' err'); }, 2200);
+}
+let klickBusy = false;
+async function tileClick(id){
+  if(klickBusy || !STATE) return;
+  const t = STATE.kacheln.find(k => k.id === id);
+  if(!t || !t.klickbar) return;
+  if(t.bestaetigen && !await confirmDialog(t.name, 'Aktion für „' + t.name + '“ jetzt auslösen?', 'Senden')) return;
+  klickBusy = true;
+  try{
+    const r = await api('/api/tiles/klick', {id});
+    toast(r.ok ? (t.name + ': gesendet') : (r.meldung || r.fehler || 'Fehler'), !!r.ok);
+  }catch(e){ toast('Dashboard nicht erreichbar', false); }
+  klickBusy = false;
+  setTimeout(refresh, 400);
 }
 
 /* ---------- Einstellungen ---------- */
@@ -1856,7 +1996,7 @@ function renderManageList(){
   if(!tiles.length){ el.innerHTML = '<div class="t-empty">Noch keine Kacheln angelegt.</div>'; return; }
   el.innerHTML = tiles.map((t, i) => `<div class="manage-row">
       <div class="manage-icon">${iconSvg(t.symbol)}</div>
-      <div class="manage-info">${esc(t.name)}<div class="manage-sub">${esc(t.topic || '(kein Topic)')}${t.json_feld ? ' &rarr; ' + esc(t.json_feld) : ''}${t.einheit ? ' &middot; ' + esc(t.einheit) : ''}${t.schwellwerte.length ? ' &middot; ' + t.schwellwerte.length + ' Schwellwert(e)' : ''}</div></div>
+      <div class="manage-info">${esc(t.name)}<div class="manage-sub">${esc(t.topic || '(kein Topic)')}${t.json_feld ? ' &rarr; ' + esc(t.json_feld) : ''}${t.einheit ? ' &middot; ' + esc(t.einheit) : ''}${t.schwellwerte.length ? ' &middot; ' + t.schwellwerte.length + ' Schwellwert(e)' : ''}${(t.zusatz_topics || []).length ? ' &middot; +' + t.zusatz_topics.length + ' Topic(s)' : ''}${t.klick_topic ? ' &middot; Aktion: ' + esc(t.klick_topic) : ''}</div></div>
       <div class="manage-actions">
         <button class="btn-mini" onclick="moveTile(${i},-1)" ${i === 0 ? 'disabled' : ''} title="nach oben">&uarr;</button>
         <button class="btn-mini" onclick="moveTile(${i},1)" ${i === tiles.length - 1 ? 'disabled' : ''} title="nach unten">&darr;</button>
@@ -1955,12 +2095,13 @@ function loadBrowser(){
 
 /* ---------- Kachel-Modal ---------- */
 function blankTile(){
-  return {id:'', name:'', topic:'', json_feld:'', einheit:'', nachkommastellen:-1, faktor:1, symbol:'info', treffer_modus:'alle', schwellwerte:[]};
+  return {id:'', name:'', topic:'', json_feld:'', einheit:'', nachkommastellen:-1, faktor:1, symbol:'info', treffer_modus:'alle', schwellwerte:[],
+          zusatz_topics:[], klick_topic:'', klick_payload:'', klick_retain:false, klick_bestaetigen:false};
 }
 async function openTileModal(id, topic){
   if(!CFG) await loadConfig();
   const src = id ? CFG.kacheln.find(t => t.id === id) : null;
-  editTile = JSON.parse(JSON.stringify(src || blankTile()));
+  editTile = Object.assign(blankTile(), JSON.parse(JSON.stringify(src || {})));
   if(topic){
     editTile.topic = topic;
     if(!editTile.name){ const p = topic.split('/').filter(Boolean); editTile.name = p.slice(-2).join(' ').slice(0, 60); }
@@ -1973,14 +2114,19 @@ async function openTileModal(id, topic){
   document.getElementById('tDec').value = String(editTile.nachkommastellen);
   document.getElementById('tFactor').value = String(editTile.faktor).replace('.', ',');
   document.getElementById('tMode').value = editTile.treffer_modus;
+  document.getElementById('tKTopic').value = editTile.klick_topic;
+  document.getElementById('tKPayload').value = editTile.klick_payload;
+  document.getElementById('tKConfirm').checked = !!editTile.klick_bestaetigen;
+  document.getElementById('tKRetain').checked = !!editTile.klick_retain;
   document.getElementById('tileMsg').textContent = '';
+  fillTopicDatalist();
   renderIconGrid();
   renderThresholds();
   document.getElementById('tileModal').classList.add('show');
   loadTopicDetail();
   schedulePreview();
   clearInterval(previewTimer);
-  previewTimer = setInterval(() => { loadTopicDetail(true); schedulePreview(); }, 3000);
+  previewTimer = setInterval(() => { loadTopicDetail(true); updateZusatzWerte(); schedulePreview(); }, 3000);
 }
 function closeTileModal(){
   document.getElementById('tileModal').classList.remove('show');
@@ -1995,18 +2141,24 @@ function readTileForm(){
   editTile.nachkommastellen = parseInt(document.getElementById('tDec').value, 10);
   editTile.faktor = document.getElementById('tFactor').value.trim() || '1';
   editTile.treffer_modus = document.getElementById('tMode').value;
-  editTile.schwellwerte = Array.from(document.querySelectorAll('#thrList .thr-row:not(.thr-head)')).map(r => ({
-    vergleich: r.querySelector('.thr-op').value,
-    wert: r.querySelector('.thr-val').value,
-    text: r.querySelector('.thr-text').value,
-    farbe: r.querySelector('.thr-col').value,
+  editTile.schwellwerte = readThr(document.getElementById('thrList'));
+  editTile.zusatz_topics = Array.from(document.querySelectorAll('#zusatzList .zusatz-block')).map(b => ({
+    topic: b.querySelector('.z-topic').value.trim(),
+    json_feld: b.querySelector('.z-json').value.trim(),
+    treffer_modus: b.querySelector('.z-mode').value,
+    schwellwerte: readThr(b.querySelector('.z-thr')),
   }));
+  editTile.klick_topic = document.getElementById('tKTopic').value.trim();
+  editTile.klick_payload = document.getElementById('tKPayload').value;
+  editTile.klick_bestaetigen = document.getElementById('tKConfirm').checked;
+  editTile.klick_retain = document.getElementById('tKRetain').checked;
   return editTile;
 }
 async function saveTile(){
   const t = readTileForm();
   if(!t.topic){ document.getElementById('tileMsg').textContent = 'Bitte ein Topic wählen.'; return; }
   if(!t.name){ document.getElementById('tileMsg').textContent = 'Bitte einen Namen eingeben.'; return; }
+  if(/[+#]/.test(t.klick_topic)){ document.getElementById('tileMsg').textContent = 'Das Aktions-Topic darf kein + oder # enthalten.'; return; }
   const r = await api('/api/tiles', t);
   if(!r.ok){ document.getElementById('tileMsg').textContent = r.fehler || 'Fehler'; return; }
   closeTileModal();
@@ -2040,22 +2192,90 @@ function thrRowHtml(s){
     <button type="button" class="btn-mini btn-delete" onclick="removeThreshold(this)" title="entfernen">&#10005;</button>
   </div>`;
 }
+function thrListHtml(list){
+  const head = list.length ? '<div class="thr-row thr-head"><span>Bedingung</span><span>Wert</span><span>Text auf der Kachel</span><span>Farbe</span><span></span></div>' : '';
+  return head + list.map(thrRowHtml).join('');
+}
+function readThr(el){
+  return Array.from(el.querySelectorAll('.thr-row:not(.thr-head)')).map(r => ({
+    vergleich: r.querySelector('.thr-op').value,
+    wert: r.querySelector('.thr-val').value,
+    text: r.querySelector('.thr-text').value,
+    farbe: r.querySelector('.thr-col').value,
+  }));
+}
 function renderThresholds(){
-  const head = editTile.schwellwerte.length ? '<div class="thr-row thr-head"><span>Bedingung</span><span>Wert</span><span>Text auf der Kachel</span><span>Farbe</span><span></span></div>' : '';
-  document.getElementById('thrList').innerHTML = head + editTile.schwellwerte.map(thrRowHtml).join('');
+  document.getElementById('thrList').innerHTML = thrListHtml(editTile.schwellwerte);
+  renderZusatz();
+}
+function renderZusatz(){
+  document.getElementById('zusatzList').innerHTML = editTile.zusatz_topics.map((z, i) => `<div class="zusatz-block" data-i="${i}">
+      <div class="zusatz-head"><span class="lbl">Weiteres Topic ${i + 1}</span>
+        <button type="button" class="btn-mini btn-delete" onclick="removeZusatz(${i})">Entfernen</button></div>
+      <div class="form-grid keep2">
+        <div class="field"><label class="lbl">Topic</label><input type="text" class="z-topic" list="topicDatalist" value="${esc(z.topic)}" placeholder="z. B. stat/steckdose/POWER" autocomplete="off" autocapitalize="off" spellcheck="false" onchange="updateZusatzWerte(); schedulePreview()"></div>
+        <div class="field"><label class="lbl">JSON-Feld (optional)</label><input type="text" class="z-json" value="${esc(z.json_feld)}" placeholder="z. B. POWER" autocapitalize="off" spellcheck="false" oninput="schedulePreview()"></div>
+      </div>
+      <div class="hint-text z-current">Aktuell: -</div>
+      <div class="z-thr">${thrListHtml(z.schwellwerte)}</div>
+      <div class="actions-row">
+        <button type="button" class="btn-mini" onclick="addThreshold(${i})">+ Bedingung</button>
+        <select class="z-mode" style="width:auto; max-width:100%; flex:1 1 220px;" onchange="schedulePreview()">
+          <option value="erster" ${z.treffer_modus !== 'alle' ? 'selected' : ''}>Nur ersten Treffer anzeigen</option>
+          <option value="alle" ${z.treffer_modus === 'alle' ? 'selected' : ''}>Alle Treffer anzeigen</option>
+        </select>
+      </div>
+    </div>`).join('');
+  updateZusatzWerte();
+}
+async function updateZusatzWerte(){
+  const blocks = document.querySelectorAll('#zusatzList .zusatz-block');
+  for(const b of blocks){
+    const topic = b.querySelector('.z-topic').value.trim();
+    const el = b.querySelector('.z-current');
+    if(!topic){ el.textContent = 'Aktuell: -'; continue; }
+    try{
+      const r = await fetch('/api/topic?t=' + encodeURIComponent(topic)).then(r => r.json());
+      el.textContent = 'Aktuell: ' + (r.vorhanden ? r.wert.slice(0, 160) : 'noch nichts empfangen');
+    }catch(e){}
+  }
 }
 function removeThreshold(btn){
-  btn.parentElement.remove();
+  btn.closest('.thr-row').remove();
   readTileForm();
   renderThresholds();
   schedulePreview();
 }
-function addThreshold(){
+function addThreshold(zi){
   readTileForm();
-  editTile.schwellwerte.push({vergleich:'>=', wert:'', text:'', farbe: editTile.schwellwerte.length ? 'orange' : 'gruen'});
+  const list = zi === undefined ? editTile.schwellwerte : editTile.zusatz_topics[zi].schwellwerte;
+  list.push({vergleich: zi === undefined ? '>=' : '==', wert:'', text:'', farbe: list.length ? 'orange' : 'gruen'});
   renderThresholds();
-  const rows = document.querySelectorAll('#thrList .thr-row:not(.thr-head)');
+  const box = zi === undefined ? document.getElementById('thrList') : document.querySelectorAll('#zusatzList .z-thr')[zi];
+  const rows = box.querySelectorAll('.thr-row:not(.thr-head)');
   rows[rows.length - 1].querySelector('.thr-val').focus();
+}
+function addZusatz(){
+  readTileForm();
+  editTile.zusatz_topics.push({topic:'', json_feld:'', treffer_modus:'erster', schwellwerte:[
+    {vergleich:'==', wert:'ON', text:'Eingeschaltet', farbe:'gruen'},
+    {vergleich:'==', wert:'OFF', text:'Ausgeschaltet', farbe:'grau'}]});
+  renderThresholds();
+  const t = document.querySelectorAll('#zusatzList .z-topic');
+  t[t.length - 1].focus();
+  schedulePreview();
+}
+function removeZusatz(i){
+  readTileForm();
+  editTile.zusatz_topics.splice(i, 1);
+  renderThresholds();
+  schedulePreview();
+}
+async function fillTopicDatalist(){
+  try{
+    const r = await fetch('/api/topics?limit=1000').then(r => r.json());
+    document.getElementById('topicDatalist').innerHTML = r.topics.map(t => `<option value="${esc(t.topic)}">`).join('');
+  }catch(e){}
 }
 
 let pvTimer = null;
@@ -2067,7 +2287,7 @@ function schedulePreview(){
     const r = await api('/api/preview', Object.assign({}, t, {name: t.name || 'Vorschau'}));
     if(r && r.id !== undefined){
       const now = (STATE ? STATE.jetzt + (Date.now() - STATE_AT) / 1000 : Date.now() / 1000);
-      document.getElementById('previewWrap').innerHTML = tileHtml(r, now, (r.nachrichten || 0) % 2 === 1);
+      document.getElementById('previewWrap').innerHTML = tileHtml(r, now, (r.nachrichten || 0) % 2 === 1, true);
     }
   }, 250);
 }

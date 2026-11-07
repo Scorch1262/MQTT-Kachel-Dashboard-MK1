@@ -32,7 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 APP_NAME = "MQTT-Kachel-Dashboard-MK1"
-APP_VERSION = "1.6.0"
+APP_VERSION = "1.7.0"
 DEFAULT_PORT = 8085
 CONFIG_FILENAME = "config.json"
 
@@ -1192,7 +1192,7 @@ def make_handler(app):
                 n = int(self.headers.get("Content-Length") or 0)
             except ValueError:
                 n = 0
-            if n <= 0 or n > 1_000_000:
+            if n <= 0 or n > 5_000_000:
                 return {}
             try:
                 data = json.loads(self.rfile.read(n).decode("utf-8"))
@@ -1315,6 +1315,34 @@ def make_handler(app):
                     app.store.save()
                 app.mqtt.ensure_subscriptions()
                 return self._json({"ok": True, "kachel": tile})
+
+            if p == "/api/config/upload":
+                raw = data.get("konfiguration")
+                if not isinstance(raw, dict) or not any(k in raw for k in ("kacheln", "broker", "server")):
+                    return self._err("Keine gültige Konfigurationsdatei (erwartet: JSON mit 'kacheln', 'broker' oder 'server')")
+                if "kacheln" in raw and not isinstance(raw["kacheln"], list):
+                    return self._err("Ungültige Konfiguration: 'kacheln' ist keine Liste")
+                neu = normalize_config(raw)
+                with app.store.lock:
+                    alt = app.store.cfg
+                    # Sicherung der bisherigen Konfiguration
+                    sicherung = app.store.path + ".vor-upload-" + time.strftime("%Y%m%d-%H%M%S")
+                    try:
+                        shutil.copy2(app.store.path, sicherung)
+                    except Exception:
+                        sicherung = ""
+                    # geraetebezogene Werte behalten
+                    neu["server"]["port"] = alt["server"]["port"]
+                    neu["server"]["host"] = alt["server"]["host"]
+                    neu["broker"]["client_id"] = alt["broker"]["client_id"]
+                    if not neu["broker"]["passwort"] and neu["broker"]["benutzer"] == alt["broker"]["benutzer"]:
+                        neu["broker"]["passwort"] = alt["broker"]["passwort"]
+                    app.store.cfg = neu
+                    app.store.save()
+                app.mqtt.restart()
+                print("[Config] Konfiguration hochgeladen: %d Kacheln, Sicherung: %s" % (len(neu["kacheln"]), sicherung or "-"))
+                return self._json({"ok": True, "kacheln": len(neu["kacheln"]),
+                                   "sicherung": os.path.basename(sicherung) if sicherung else ""})
 
             if p == "/api/tiles/delete":
                 tid = str(data.get("id") or "")
@@ -1787,12 +1815,21 @@ INDEX_HTML = r"""<!DOCTYPE html>
   </div>
 
   <div class="settings-section">
-    <h2>Konfiguration sichern</h2>
+    <h2>Konfiguration sichern / laden</h2>
     <div class="hint-text">Lädt die komplette aktuelle Konfiguration (Webseite, Broker, alle Kacheln) als
       lesbare JSON-Datei herunter – z. B. als Sicherung. Die Datei hat denselben Aufbau wie die config.json des Programms.</div>
     <div class="checkbox-row"><input type="checkbox" id="dlPass"><label for="dlPass">Broker-Passwort mitspeichern (Klartext!)</label></div>
     <a class="btn" id="dlBtn" href="/api/config/download" download onclick="this.href = '/api/config/download' + (document.getElementById('dlPass').checked ? '?passwort=1' : '')"
        style="display:inline-block; text-decoration:none;">&#8681; Konfiguration herunterladen</a>
+    <hr class="sep">
+    <div class="hint-text">Eine gespeicherte Konfigurationsdatei hochladen und übernehmen. Die bisherige Konfiguration wird
+      vorher automatisch als Sicherung neben der config.json abgelegt. Port und Client-ID dieses Geräts bleiben erhalten;
+      enthält die Datei kein Broker-Passwort, bleibt das gespeicherte Passwort bestehen.</div>
+    <input type="file" id="ulFile" accept=".json,application/json" style="display:none;" onchange="uploadConfig(this)">
+    <div class="actions-row">
+      <button class="btn btn-ghost" onclick="document.getElementById('ulFile').click()">&#8679; Konfiguration hochladen</button>
+      <span class="msg" id="ulMsg"></span>
+    </div>
   </div>
 
   <div class="settings-section">
@@ -2186,6 +2223,32 @@ async function quitApp(){
   if(!await confirmDialog('Programm beenden', 'Das Dashboard-Programm wird beendet. Die Webseite ist danach nicht mehr erreichbar.', 'Beenden')) return;
   await api('/api/quit', {});
   document.body.innerHTML = '<div class="empty-state" style="padding-top:120px;"><h2>Programm beendet</h2><div>Dieses Fenster kann geschlossen werden.</div></div>';
+}
+
+/* ---------- Konfiguration hochladen ---------- */
+async function uploadConfig(input){
+  const f = input.files && input.files[0];
+  input.value = '';
+  if(!f) return;
+  let cfg;
+  try{
+    cfg = JSON.parse(await f.text());
+  }catch(e){
+    setMsg('ulMsg', 'Datei ist kein gültiges JSON.', false); return;
+  }
+  if(!cfg || typeof cfg !== 'object' || !('kacheln' in cfg || 'broker' in cfg || 'server' in cfg)){
+    setMsg('ulMsg', 'Keine gültige Konfigurationsdatei.', false); return;
+  }
+  const n = Array.isArray(cfg.kacheln) ? cfg.kacheln.length : 0;
+  const host = cfg.broker && cfg.broker.host ? cfg.broker.host + ':' + (cfg.broker.port || 1883) : '(kein Broker)';
+  if(!await confirmDialog('Konfiguration übernehmen',
+      `„${f.name}“ enthält ${n} Kachel(n), Broker ${host}. Die aktuelle Konfiguration wird ersetzt (eine Sicherung wird angelegt).`,
+      'Übernehmen')) return;
+  const r = await api('/api/config/upload', {konfiguration: cfg});
+  if(!r.ok){ setMsg('ulMsg', r.fehler || 'Fehler beim Hochladen', false); return; }
+  setMsg('ulMsg', `Übernommen: ${r.kacheln} Kachel(n)` + (r.sicherung ? ` – Sicherung: ${r.sicherung}` : ''), true);
+  for(const k in MSG_DOT) delete MSG_DOT[k];
+  await loadConfig(); fillSettings(); refresh();
 }
 
 /* ---------- Topic-Browser ---------- */

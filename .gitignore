@@ -2,6 +2,7 @@
 config.json
 config.json.tmp
 config.json.defekt-*
+config.json.vor-upload-*
 
 # Python
 __pycache__/

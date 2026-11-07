@@ -4,7 +4,7 @@ Lokales Web-Dashboard, das Werte aus **MQTT-Topics als Kacheln** anzeigt – im
 dunklen, technischen Design des Drucker Dashboards MK6. Ein einziges
 Python-Skript (`app.py`), **keine Zusatzpakete**, keine Cloud.
 
-**Version: 1.4.0**
+**Version: 1.5.0**
 
 ![Vorschau: Kachel-Ansicht am Rechner und auf dem iPhone](docs/vorschau.png)
 
@@ -33,7 +33,8 @@ Python-Skript (`app.py`), **keine Zusatzpakete**, keine Cloud.
     (Kachelrahmen, Symbol und Wert färben sich mit).
 - **Weitere Topics je Kachel:** z. B. neben der Leistung zusätzlich den Schaltzustand
   (`stat/steckdose/POWER`) – angezeigt werden die Texte der zutreffenden Bedingungen,
-  etwa „Eingeschaltet“ / „Ausgeschaltet“.
+  etwa „Eingeschaltet“ / „Ausgeschaltet“ – **oder** der aktuelle Wert mit Bezeichnung und Einheit
+  (z. B. „Spannung 231 V“, mit eigenem JSON-Feld, Faktor und Nachkommastellen).
 - **Aktion beim Antippen:** je Kachel ein Topic + Payload (z. B. `cmnd/steckdose/POWER` /
   `TOGGLE`), optional mit Rückfrage und als „retained“. Alternativ **Umschalten**: bei jedem
   Antippen wird abwechselnd Wert 1 / Wert 2 gesendet (z. B. 1 → 0 → 1), passend zum aktuellen
@@ -99,9 +100,9 @@ direkt neben der App.
 ## 4. GL.iNet Brume 2 – Zip kopieren und installieren (ohne GitHub)
 
 ```
-scp MQTT-Kachel-Dashboard-MK1-v1.4.0.zip root@<BRUME-IP>:/tmp/
+scp MQTT-Kachel-Dashboard-MK1-v1.5.0.zip root@<BRUME-IP>:/tmp/
 ssh root@<BRUME-IP>
-cd /tmp && unzip -o MQTT-Kachel-Dashboard-MK1-v1.4.0.zip
+cd /tmp && unzip -o MQTT-Kachel-Dashboard-MK1-v1.5.0.zip
 sh MQTT-Kachel-Dashboard-MK1/install.sh
 ```
 
@@ -243,6 +244,8 @@ brume2/offline-paket-bauen-*    Offline-Paket lokal bauen (Windows/Mac)
 
 ## Versionen
 
+- **1.5.0** – Weitere Topics können statt eines Textes den aktuellen Wert mit Bezeichnung und
+  Einheit anzeigen (optional eingefärbt über Bedingungen).
 - **1.4.0** – Topic-Namen werden auf den Kacheln nicht mehr angezeigt; Aktion „Umschalten
   zwischen zwei Werten“ (Zustand aus Aktions- oder eigenem Zustands-Topic, optional JSON-Feld).
 - **1.3.0** – Weitere Topics je Kachel mit eigenen Bedingungen/Texten (z. B. Ein/Aus-Anzeige);

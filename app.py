@@ -32,7 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 APP_NAME = "MQTT-Kachel-Dashboard-MK1"
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.5.0"
 DEFAULT_PORT = 8085
 CONFIG_FILENAME = "config.json"
 
@@ -355,6 +355,11 @@ def normalize_tile(t, keep_id=True):
             "json_feld": str(z.get("json_feld") or "").strip()[:200],
             "treffer_modus": zmodus if zmodus in ("alle", "erster") else "erster",
             "schwellwerte": normalize_schwellwerte(z.get("schwellwerte")),
+            "anzeige": "wert" if z.get("anzeige") == "wert" else "text",
+            "bezeichnung": str(z.get("bezeichnung") or "").strip()[:40],
+            "einheit": str(z.get("einheit") or "").strip()[:20],
+            "nachkommastellen": _as_int(z.get("nachkommastellen"), -1, -1, 6),
+            "faktor": _as_float(z.get("faktor"), 1.0) or 1.0,
         })
     return {
         "id": tid,
@@ -982,10 +987,22 @@ def evaluate_tile(tile, cache):
         "zusatz": [], "klickbar": bool(tile.get("klick_topic")),
         "bestaetigen": bool(tile.get("klick_bestaetigen")),
     }
-    # weitere Topics: nur die Texte der zutreffenden Schwellwerte
+    res["zusatz_werte"] = []
+    # weitere Topics: Texte der zutreffenden Schwellwerte ODER aktueller Wert mit Einheit
     for z in tile.get("zusatz_topics") or []:
-        zr = werte_topic(cache, z["topic"], z["json_feld"], 1.0, -1, z["schwellwerte"], z["treffer_modus"])
-        res["zusatz"].extend(m for m in zr["treffer"] if m["text"])
+        if z.get("anzeige") == "wert":
+            zr = werte_topic(cache, z["topic"], z["json_feld"], z.get("faktor", 1.0), z.get("nachkommastellen", -1),
+                             z["schwellwerte"], "erster")
+            res["zusatz_werte"].append({
+                "bezeichnung": z.get("bezeichnung", ""),
+                "wert": zr["wert"] if zr["hat_wert"] else None,
+                "einheit": z.get("einheit", ""),
+                "farbe": zr["treffer"][0]["farbe"] if zr["treffer"] else None,
+                "fehler": zr["fehler"],
+            })
+        else:
+            zr = werte_topic(cache, z["topic"], z["json_feld"], 1.0, -1, z["schwellwerte"], z["treffer_modus"])
+            res["zusatz"].extend(m for m in zr["treffer"] if m["text"])
     if not tile["topic"]:
         res["fehler"] = "Kein Topic gewählt"
         return res
@@ -1514,6 +1531,15 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .tile-value.nodata{ font-size:14px; color:var(--text-dim); font-weight:400; font-family:var(--sans); letter-spacing:0; }
   .tile-value.err{ font-size:13px; color:var(--danger); font-weight:400; font-family:var(--mono); letter-spacing:0; }
   .tile-chips{ display:flex; flex-wrap:wrap; gap:6px; }
+  .tile-subs{ display:flex; flex-direction:column; gap:4px; margin-top:-2px; }
+  .tile-sub{ display:flex; align-items:baseline; justify-content:space-between; gap:8px; font-family:var(--mono); min-width:0; }
+  .tile-sub .sub-lbl{ font-family:var(--sans); font-size:12px; color:var(--text-dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+  .tile-sub .sub-val{ font-size:15px; font-weight:600; white-space:nowrap; }
+  .tile-sub .sub-lbl + .sub-val{ margin-left:auto; }
+  .tile-sub .sub-unit{ font-size:11px; color:var(--text-dim); font-weight:400; margin-left:3px; }
+  .z-wert-felder{ display:none; }
+  .zusatz-block.mode-wert .z-wert-felder{ display:block; }
+  .zusatz-block.mode-wert .z-mode{ display:none; }
   .chip{
     font-family:var(--mono); font-size:11px; padding:3px 10px; border-radius:20px;
     border:1px solid currentColor; letter-spacing:.3px; font-weight:600;
@@ -1805,9 +1831,10 @@ INDEX_HTML = r"""<!DOCTYPE html>
     </div>
 
     <hr class="sep">
-    <label class="lbl">Weitere Topics (Anzeige-Texte)</label>
-    <div class="hint-text">Zusätzliche Topics für diese Kachel, z. B. ein Schaltzustand (ON/OFF). Auf der Kachel erscheinen
-      nur die Texte der zutreffenden Bedingungen – etwa „Eingeschaltet“ neben dem Leistungswert.</div>
+    <label class="lbl">Weitere Topics (Texte oder Werte)</label>
+    <div class="hint-text">Zusätzliche Topics für diese Kachel, z. B. ein Schaltzustand (ON/OFF). Auf der Kachel erscheint
+      wahlweise der Text der zutreffenden Bedingung – etwa „Eingeschaltet“ – oder der aktuelle Wert mit Einheit
+      (z. B. Spannung 231 V).</div>
     <div id="zusatzList"></div>
     <button class="btn-mini" onclick="addZusatz()">+ Weiteres Topic</button>
 
@@ -1927,6 +1954,10 @@ function tileHtml(t, nowServer, dot, vorschau){
     const vstyle = col ? ` style="color:${col}"` : '';
     valueHtml = `<div class="tile-value"${vstyle}>${esc(t.wert)}${t.einheit ? `<span class="tile-unit">${esc(t.einheit)}</span>` : ''}</div>`;
   }
+  const subs = (t.zusatz_werte || []).map(z => `<div class="tile-sub">
+      ${z.bezeichnung ? `<span class="sub-lbl">${esc(z.bezeichnung)}</span>` : ''}
+      <span class="sub-val"${z.farbe ? ` style="color:${z.farbe}"` : ''}>${z.wert !== null ? esc(z.wert) : '–'}${z.wert !== null && z.einheit ? `<span class="sub-unit">${esc(z.einheit)}</span>` : ''}</span>
+    </div>`).join('');
   const chips = (t.treffer || []).concat(t.zusatz || []).filter(m => m.text).map(m =>
     `<span class="chip" style="color:${m.farbe}" title="${esc(m.text)}">${esc(m.text)}</span>`).join('');
   const klick = t.klickbar && !vorschau ? ` onclick="tileClick('${esc(t.id)}')" title="Antippen sendet die festgelegte MQTT-Nachricht"` : '';
@@ -1936,7 +1967,7 @@ function tileHtml(t, nowServer, dot, vorschau){
       <div class="tile-titles"><div class="tile-name" title="${esc(t.name)}">${esc(t.name)}</div></div>
       ${t.klickbar ? TAP_SVG : ''}<span class="msg-dot ${dot ? 'on' : ''}" title="Wechselt bei jeder neuen MQTT-Nachricht"></span>
     </div>
-    <div class="tile-body">${valueHtml}${chips ? `<div class="tile-chips">${chips}</div>` : ''}</div>
+    <div class="tile-body">${valueHtml}${subs ? `<div class="tile-subs">${subs}</div>` : ''}${chips ? `<div class="tile-chips">${chips}</div>` : ''}</div>
   </div>`;
 }
 
@@ -2213,6 +2244,11 @@ function readTileForm(){
     topic: b.querySelector('.z-topic').value.trim(),
     json_feld: b.querySelector('.z-json').value.trim(),
     treffer_modus: b.querySelector('.z-mode').value,
+    anzeige: b.querySelector('.z-anzeige').value,
+    bezeichnung: b.querySelector('.z-bez').value.trim(),
+    einheit: b.querySelector('.z-unit').value.trim(),
+    nachkommastellen: parseInt(b.querySelector('.z-dec').value, 10),
+    faktor: b.querySelector('.z-factor').value.trim() || '1',
     schwellwerte: readThr(b.querySelector('.z-thr')),
   }));
   editTile.klick_topic = document.getElementById('tKTopic').value.trim();
@@ -2281,7 +2317,7 @@ function renderThresholds(){
   renderZusatz();
 }
 function renderZusatz(){
-  document.getElementById('zusatzList').innerHTML = editTile.zusatz_topics.map((z, i) => `<div class="zusatz-block" data-i="${i}">
+  document.getElementById('zusatzList').innerHTML = editTile.zusatz_topics.map((z, i) => `<div class="zusatz-block${z.anzeige === 'wert' ? ' mode-wert' : ''}" data-i="${i}">
       <div class="zusatz-head"><span class="lbl">Weiteres Topic ${i + 1}</span>
         <button type="button" class="btn-mini btn-delete" onclick="removeZusatz(${i})">Entfernen</button></div>
       <div class="form-grid keep2">
@@ -2289,6 +2325,21 @@ function renderZusatz(){
         <div class="field"><label class="lbl">JSON-Feld (optional)</label><input type="text" class="z-json" value="${esc(z.json_feld)}" placeholder="z. B. POWER" autocapitalize="off" spellcheck="false" oninput="schedulePreview()"></div>
       </div>
       <div class="hint-text z-current">Aktuell: -</div>
+      <div class="field"><label class="lbl">Anzeige auf der Kachel</label>
+        <select class="z-anzeige" onchange="this.closest('.zusatz-block').classList.toggle('mode-wert', this.value === 'wert'); schedulePreview()">
+          <option value="text" ${z.anzeige !== 'wert' ? 'selected' : ''}>Text aus den Bedingungen</option>
+          <option value="wert" ${z.anzeige === 'wert' ? 'selected' : ''}>Aktueller Wert mit Einheit</option>
+        </select></div>
+      <div class="z-wert-felder">
+        <div class="form-grid keep2">
+          <div class="field"><label class="lbl">Bezeichnung (optional)</label><input type="text" class="z-bez" maxlength="40" value="${esc(z.bezeichnung || '')}" placeholder="z. B. Spannung" oninput="schedulePreview()"></div>
+          <div class="field"><label class="lbl">Einheit</label><input type="text" class="z-unit" maxlength="20" list="unitList" value="${esc(z.einheit || '')}" placeholder="z. B. V" oninput="schedulePreview()"></div>
+          <div class="field"><label class="lbl">Nachkommastellen</label>
+            <select class="z-dec" onchange="schedulePreview()">${[-1,0,1,2,3].map(d => `<option value="${d}" ${(z.nachkommastellen ?? -1) == d ? 'selected' : ''}>${d < 0 ? 'automatisch' : d}</option>`).join('')}</select></div>
+          <div class="field"><label class="lbl">Faktor (Umrechnung)</label><input type="text" class="z-factor" inputmode="decimal" value="${esc(String(z.faktor ?? 1).replace('.', ','))}" placeholder="1" oninput="schedulePreview()"></div>
+        </div>
+        <div class="hint-text">Bedingungen sind hier optional: die erste zutreffende färbt den Wert in ihrer Farbe.</div>
+      </div>
       <div class="z-thr">${thrListHtml(z.schwellwerte)}</div>
       <div class="actions-row">
         <button type="button" class="btn-mini" onclick="addThreshold(${i})">+ Bedingung</button>
@@ -2329,7 +2380,7 @@ function addThreshold(zi){
 }
 function addZusatz(){
   readTileForm();
-  editTile.zusatz_topics.push({topic:'', json_feld:'', treffer_modus:'erster', schwellwerte:[
+  editTile.zusatz_topics.push({topic:'', json_feld:'', treffer_modus:'erster', anzeige:'text', bezeichnung:'', einheit:'', nachkommastellen:-1, faktor:1, schwellwerte:[
     {vergleich:'==', wert:'ON', text:'Eingeschaltet', farbe:'gruen'},
     {vergleich:'==', wert:'OFF', text:'Ausgeschaltet', farbe:'grau'}]});
   renderThresholds();

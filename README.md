@@ -4,7 +4,7 @@ Lokales Web-Dashboard, das Werte aus **MQTT-Topics als Kacheln** anzeigt – im
 dunklen, technischen Design des Drucker Dashboards MK6. Ein einziges
 Python-Skript (`app.py`), **keine Zusatzpakete**, keine Cloud.
 
-**Version: 1.5.0**
+**Version: 1.6.0**
 
 ![Vorschau: Kachel-Ansicht am Rechner und auf dem iPhone](docs/vorschau.png)
 
@@ -47,6 +47,8 @@ Python-Skript (`app.py`), **keine Zusatzpakete**, keine Cloud.
   Eingabefeldern, „Zum Home-Bildschirm“ mit eigenem App-Symbol.
 - **Port der Webseite dauerhaft änderbar** – der Server zieht sofort um, die Seite
   leitet automatisch weiter (auf dem Brume wird die Firewall-Regel mitgezogen).
+- **Konfiguration herunterladen** unter *Einstellungen → Konfiguration sichern* (JSON-Datei,
+  Broker-Passwort nur auf Wunsch enthalten).
 - Alle Einstellungen in **`config.json` neben der exe/App** (gut lesbares JSON).
 
 ---
@@ -100,9 +102,9 @@ direkt neben der App.
 ## 4. GL.iNet Brume 2 – Zip kopieren und installieren (ohne GitHub)
 
 ```
-scp MQTT-Kachel-Dashboard-MK1-v1.5.0.zip root@<BRUME-IP>:/tmp/
+scp MQTT-Kachel-Dashboard-MK1-v1.6.0.zip root@<BRUME-IP>:/tmp/
 ssh root@<BRUME-IP>
-cd /tmp && unzip -o MQTT-Kachel-Dashboard-MK1-v1.5.0.zip
+cd /tmp && unzip -o MQTT-Kachel-Dashboard-MK1-v1.6.0.zip
 sh MQTT-Kachel-Dashboard-MK1/install.sh
 ```
 
@@ -244,6 +246,7 @@ brume2/offline-paket-bauen-*    Offline-Paket lokal bauen (Windows/Mac)
 
 ## Versionen
 
+- **1.6.0** – Konfiguration in den Einstellungen herunterladbar (optional mit Broker-Passwort).
 - **1.5.0** – Weitere Topics können statt eines Textes den aktuellen Wert mit Bezeichnung und
   Einheit anzeigen (optional eingefärbt über Bedingungen).
 - **1.4.0** – Topic-Namen werden auf den Kacheln nicht mehr angezeigt; Aktion „Umschalten

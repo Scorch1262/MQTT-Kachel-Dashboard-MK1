@@ -32,7 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 APP_NAME = "MQTT-Kachel-Dashboard-MK1"
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.6.0"
 DEFAULT_PORT = 8085
 CONFIG_FILENAME = "config.json"
 
@@ -1168,11 +1168,13 @@ def make_handler(app):
             pass
 
         # --- Antworten ---------------------------------------------------
-        def _send(self, code, body, ctype):
+        def _send(self, code, body, ctype, dateiname=None):
             if isinstance(body, str):
                 body = body.encode("utf-8")
             self.send_response(code)
             self.send_header("Content-Type", ctype)
+            if dateiname:
+                self.send_header("Content-Disposition", 'attachment; filename="%s"' % dateiname)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
@@ -1221,6 +1223,16 @@ def make_handler(app):
                 return self._send(200, APPLE_ICON_PNG, "image/png")
             if p == "/api/state":
                 return self._json(app.api_state())
+            if p == "/api/config/download":
+                cfg = app.store.snapshot()
+                mit_pw = (q.get("passwort") or ["0"])[0] == "1"
+                if not mit_pw:
+                    cfg["broker"]["passwort"] = ""
+                cfg["_export"] = "%s v%s, %s%s" % (APP_NAME, APP_VERSION, time.strftime("%Y-%m-%d %H:%M"),
+                                                   "" if mit_pw else " (ohne Broker-Passwort)")
+                body = json.dumps(cfg, indent=2, ensure_ascii=False) + "\n"
+                name = "mqtt-kachel-config-%s.json" % time.strftime("%Y-%m-%d")
+                return self._send(200, body, "application/json; charset=utf-8", dateiname=name)
             if p == "/api/config":
                 return self._json(app.api_config())
             if p == "/api/topics":
@@ -1772,6 +1784,15 @@ INDEX_HTML = r"""<!DOCTYPE html>
     </div>
     <label class="lbl" style="margin-top:16px;">Erreichbar unter</label>
     <div class="addr-list" id="addrList"></div>
+  </div>
+
+  <div class="settings-section">
+    <h2>Konfiguration sichern</h2>
+    <div class="hint-text">Lädt die komplette aktuelle Konfiguration (Webseite, Broker, alle Kacheln) als
+      lesbare JSON-Datei herunter – z. B. als Sicherung. Die Datei hat denselben Aufbau wie die config.json des Programms.</div>
+    <div class="checkbox-row"><input type="checkbox" id="dlPass"><label for="dlPass">Broker-Passwort mitspeichern (Klartext!)</label></div>
+    <a class="btn" id="dlBtn" href="/api/config/download" download onclick="this.href = '/api/config/download' + (document.getElementById('dlPass').checked ? '?passwort=1' : '')"
+       style="display:inline-block; text-decoration:none;">&#8681; Konfiguration herunterladen</a>
   </div>
 
   <div class="settings-section">

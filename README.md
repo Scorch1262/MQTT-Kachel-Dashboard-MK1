@@ -4,7 +4,7 @@ Lokales Web-Dashboard, das Werte aus **MQTT-Topics als Kacheln** anzeigt – im
 dunklen, technischen Design des Drucker Dashboards MK6. Ein einziges
 Python-Skript (`app.py`), **keine Zusatzpakete**, keine Cloud.
 
-**Version: 1.10.0**
+**Version: 1.10.1**
 
 ![Vorschau: Kachel-Ansicht am Rechner und auf dem iPhone](docs/vorschau.png)
 
@@ -115,9 +115,9 @@ direkt neben der App.
 ## 4. GL.iNet Brume 2 – Zip kopieren und installieren (ohne GitHub)
 
 ```
-scp MQTT-Kachel-Dashboard-MK1-v1.10.0.zip root@<BRUME-IP>:/tmp/
+scp MQTT-Kachel-Dashboard-MK1-v1.10.1.zip root@<BRUME-IP>:/tmp/
 ssh root@<BRUME-IP>
-cd /tmp && unzip -o MQTT-Kachel-Dashboard-MK1-v1.10.0.zip
+cd /tmp && unzip -o MQTT-Kachel-Dashboard-MK1-v1.10.1.zip
 sh MQTT-Kachel-Dashboard-MK1/install.sh
 ```
 
@@ -264,6 +264,8 @@ brume2/offline-paket-bauen-*    Offline-Paket lokal bauen (Windows/Mac)
 
 ## Versionen
 
+- **1.10.1** – Seite springt bei neuen Werten nicht mehr nach oben: Kacheln werden gezielt aktualisiert
+  statt neu aufgebaut, Scrollposition (Seite und Kachel-Editor) bleibt erhalten.
 - **1.10.0** – Kacheln in den Einstellungen kopieren (inkl. aller Einstellungen, Gruppe und Sendungen).
 - **1.9.0** – Bereiche der 3-teiligen Schaltfläche: mehrere Topics/Payloads je Bereich,
   Hervorhebung „betätigt“ über Status-Topic + Vergleichswert. Alte Konfigurationen werden übernommen.

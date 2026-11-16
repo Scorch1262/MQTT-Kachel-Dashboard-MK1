@@ -32,7 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 APP_NAME = "MQTT-Kachel-Dashboard-MK1"
-APP_VERSION = "1.10.0"
+APP_VERSION = "1.10.1"
 DEFAULT_PORT = 8085
 CONFIG_FILENAME = "config.json"
 
@@ -2224,14 +2224,49 @@ async function api(path, body){
 }
 
 /* ---------- Titel ---------- */
+let lastTitle = null;
 function setTitle(t){
   t = (t || 'MQTT Kacheln').trim();
+  if(t === lastTitle) return;
+  lastTitle = t;
   document.title = t;
   const parts = t.split(/\s+/);
   const a = parts.length > 1 ? parts.slice(0, -1).join(' ') : '';
   const b = parts[parts.length - 1];
   document.getElementById('titleA').textContent = a;
   document.getElementById('titleB').textContent = b;
+}
+
+/* ---------- Gezieltes Aktualisieren (DOM-Abgleich) ----------
+   Statt den Inhalt bei jedem neuen Wert komplett neu aufzubauen (dabei verlieren
+   manche Browser - v. a. Safari auf dem iPhone - die Scrollposition), werden nur
+   die tatsaechlich geaenderten Texte/Attribute/Elemente ausgetauscht. */
+function morph(live, neu){
+  const an = live.childNodes, bn = neu.childNodes;
+  while(an.length > bn.length) live.removeChild(live.lastChild);
+  for(let i = 0; i < bn.length; i++){
+    const nb = bn[i], na = an[i];
+    if(!na){ live.appendChild(nb.cloneNode(true)); continue; }
+    if(na.nodeType !== nb.nodeType || na.nodeName !== nb.nodeName){ live.replaceChild(nb.cloneNode(true), na); continue; }
+    if(nb.nodeType === 3 || nb.nodeType === 8){ if(na.nodeValue !== nb.nodeValue) na.nodeValue = nb.nodeValue; continue; }
+    for(const at of Array.from(na.attributes)) if(!nb.hasAttribute(at.name)) na.removeAttribute(at.name);
+    for(const at of Array.from(nb.attributes)) if(na.getAttribute(at.name) !== at.value) na.setAttribute(at.name, at.value);
+    morph(na, nb);
+  }
+}
+const _lastHtml = new WeakMap();
+function setHtml(el, html){
+  if(_lastHtml.get(el) === html) return;          // nichts geaendert -> nichts anfassen
+  _lastHtml.set(el, html);
+  const x = window.scrollX, y = window.scrollY;
+  const box = el.closest('.modal');
+  const my = box ? box.scrollTop : 0;
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  morph(el, tmp);
+  // Sicherheitsnetz: Scrollposition festhalten
+  if(window.scrollY !== y || window.scrollX !== x) window.scrollTo(x, y);
+  if(box && box.scrollTop !== my) box.scrollTop = my;
 }
 
 /* ---------- Kachel-HTML ---------- */
@@ -2285,9 +2320,9 @@ function renderTiles(){
   const nowServer = STATE.jetzt + (Date.now() - STATE_AT) / 1000;
   if(!STATE.kacheln.length){
     const noBroker = !STATE.broker.eingerichtet;
-    main.innerHTML = `<div class="empty-state"><h2>Noch keine Kacheln</h2>
+    setHtml(main, `<div class="empty-state"><h2>Noch keine Kacheln</h2>
       <div>${noBroker ? 'Zuerst unter Einstellungen den MQTT-Broker eintragen, danach Topics als Kacheln anlegen.' : 'Unter Einstellungen Topics auswählen und als Kacheln anlegen.'}</div>
-      <button class="btn" onclick="enterSettings()">&#9881; Einstellungen öffnen</button></div>`;
+      <button class="btn" onclick="enterSettings()">&#9881; Einstellungen öffnen</button></div>`);
     return;
   }
   const h = t => tileHtml(t, nowServer, dotOn(t));
@@ -2304,7 +2339,7 @@ function renderTiles(){
         ${CHEV_SVG}<span>${esc(g.name)}</span><span class="group-count">${ts.length}</span></button>
       ${zu ? '' : `<div class="tile-grid">${ts.map(h).join('')}</div>`}</section>`;
   }
-  main.innerHTML = html;
+  setHtml(main, html);
 }
 function gruppeZu(g){
   const v = lsGet('gruppeZu_' + g.id, null);
@@ -2336,8 +2371,9 @@ function renderBroker(){
   if(!STATE) return;
   const b = STATE.broker;
   const line = document.getElementById('brokerStatusLine');
-  line.textContent = b.status;
-  line.className = 'msg ' + (b.verbunden ? 'ok' : (b.eingerichtet ? 'err' : ''));
+  const cls = 'msg ' + (b.verbunden ? 'ok' : (b.eingerichtet ? 'err' : ''));
+  if(line.textContent !== b.status) line.textContent = b.status;
+  if(line.className !== cls) line.className = cls;
 }
 
 async function refresh(){
@@ -2345,10 +2381,12 @@ async function refresh(){
   try{
     const s = await fetch('/api/state', {cache:'no-store'}).then(r => r.json());
     STATE = s; STATE_AT = Date.now();
+    const x = window.scrollX, y = window.scrollY;
     document.getElementById('offlineNote').classList.remove('show');
     setTitle(s.titel);
     renderBroker();
     if(!settingsMode) renderTiles();
+    if(window.scrollY !== y || window.scrollX !== x) window.scrollTo(x, y);
   }catch(e){
     document.getElementById('offlineNote').classList.add('show');
   }
@@ -2808,7 +2846,8 @@ async function updateZusatzWerte(){
     if(!topic){ el.textContent = 'Aktuell: -'; continue; }
     try{
       const r = await fetch('/api/topic?t=' + encodeURIComponent(topic)).then(r => r.json());
-      el.textContent = 'Aktuell: ' + (r.vorhanden ? r.wert.slice(0, 160) : 'noch nichts empfangen');
+      const txt = 'Aktuell: ' + (r.vorhanden ? r.wert.slice(0, 160) : 'noch nichts empfangen');
+      if(el.textContent !== txt) el.textContent = txt;
     }catch(e){}
   }
 }
@@ -2913,7 +2952,7 @@ function schedulePreview(){
     const r = await api('/api/preview', Object.assign({}, t, {name: t.name || 'Vorschau'}));
     if(r && r.id !== undefined){
       const now = (STATE ? STATE.jetzt + (Date.now() - STATE_AT) / 1000 : Date.now() / 1000);
-      document.getElementById('previewWrap').innerHTML = tileHtml(r, now, (r.nachrichten || 0) % 2 === 1, true);
+      setHtml(document.getElementById('previewWrap'), tileHtml(r, now, (r.nachrichten || 0) % 2 === 1, true));
     }
   }, 250);
 }
@@ -2926,7 +2965,7 @@ async function loadTopicDetail(silent){
   if(!topic){ box.textContent = '-'; fw.style.display = 'none'; lastDetailTopic = null; return; }
   const r = await fetch('/api/topic?t=' + encodeURIComponent(topic)).then(r => r.json());
   if(!r.vorhanden){ box.textContent = 'Für dieses Topic wurde noch nichts empfangen.'; fw.style.display = 'none'; return; }
-  box.textContent = r.wert;
+  if(box.textContent !== r.wert) box.textContent = r.wert;
   if(silent && lastDetailTopic === topic) return;
   lastDetailTopic = topic;
   if(r.felder && r.felder.length){

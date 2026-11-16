@@ -32,7 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 APP_NAME = "MQTT-Kachel-Dashboard-MK1"
-APP_VERSION = "1.7.0"
+APP_VERSION = "1.8.0"
 DEFAULT_PORT = 8085
 CONFIG_FILENAME = "config.json"
 
@@ -231,6 +231,7 @@ def default_config():
             "topic_filter": "#",
             "keepalive": 30,
         },
+        "gruppen": [],
         "kacheln": [],
     }
 
@@ -331,6 +332,41 @@ def klick_payload(tile, cache, letzte):
     return w1
 
 
+STANDARD_TASTEN = ["▲ Hoch", "■ Stopp", "▼ Runter"]
+
+
+def normalize_tasten(liste):
+    """Genau drei Bereiche (oben, Mitte, unten) mit Text, Topic, Payload, retain."""
+    liste = liste if isinstance(liste, list) else []
+    out = []
+    for i in range(3):
+        b = liste[i] if i < len(liste) and isinstance(liste[i], dict) else {}
+        out.append({
+            "text": (str(b.get("text") if b.get("text") is not None else STANDARD_TASTEN[i]).strip()[:30]),
+            "topic": str(b.get("topic") or "").strip()[:300],
+            "payload": str(b.get("payload") if b.get("payload") is not None else "")[:2000],
+            "retain": _as_bool(b.get("retain"), False),
+        })
+    return out
+
+
+def normalize_gruppen(liste):
+    out, seen = [], set()
+    for g in (liste if isinstance(liste, list) else []):
+        if not isinstance(g, dict):
+            continue
+        gid = str(g.get("id") or "").strip()[:20]
+        if not gid or not all(c.isalnum() or c in "-_" for c in gid) or gid in seen:
+            gid = _gen_id("g")
+        seen.add(gid)
+        out.append({
+            "id": gid,
+            "name": (str(g.get("name") or "").strip() or "Gruppe")[:40],
+            "eingeklappt": _as_bool(g.get("eingeklappt"), False),
+        })
+    return out[:50]
+
+
 def normalize_tile(t, keep_id=True):
     t = t if isinstance(t, dict) else {}
     tid = str(t.get("id") or "").strip() if keep_id else ""
@@ -382,6 +418,10 @@ def normalize_tile(t, keep_id=True):
         "klick_wert_2": str(t.get("klick_wert_2") if t.get("klick_wert_2") not in (None, "") else "0")[:200],
         "klick_zustand_topic": str(t.get("klick_zustand_topic") or "").strip()[:300],
         "klick_zustand_json": str(t.get("klick_zustand_json") or "").strip()[:200],
+        "typ": "dreifach" if t.get("typ") == "dreifach" else "anzeige",
+        "breite": "schmal" if t.get("breite") == "schmal" else "normal",
+        "gruppe": str(t.get("gruppe") or "").strip()[:20],
+        "tasten": normalize_tasten(t.get("tasten")),
     }
 
 
@@ -407,6 +447,8 @@ def normalize_config(raw):
         cb["client_id"] = str(b.get("client_id") or "").strip()[:64]
         cb["topic_filter"] = str(b.get("topic_filter") or "#").strip() or "#"
         cb["keepalive"] = _as_int(b.get("keepalive"), 30, 5, 600)
+    cfg["gruppen"] = normalize_gruppen(raw.get("gruppen"))
+    gids = set(g["id"] for g in cfg["gruppen"])
     tiles = raw.get("kacheln") or []
     seen = set()
     if isinstance(tiles, list):
@@ -415,6 +457,8 @@ def normalize_config(raw):
             while nt["id"] in seen:
                 nt["id"] = _gen_id()
             seen.add(nt["id"])
+            if nt["gruppe"] not in gids:
+                nt["gruppe"] = ""
             cfg["kacheln"].append(nt)
     return cfg
 
@@ -984,7 +1028,11 @@ def evaluate_tile(tile, cache):
         "id": tile["id"], "name": tile["name"], "symbol": tile["symbol"], "topic": tile["topic"],
         "einheit": tile["einheit"], "wert": None, "hat_wert": False, "zeit": None,
         "fehler": None, "treffer": [], "farbe": None, "nachrichten": 0,
-        "zusatz": [], "klickbar": bool(tile.get("klick_topic")),
+        "zusatz": [], "klickbar": bool(tile.get("klick_topic")) and tile.get("typ") != "dreifach",
+        "typ": tile.get("typ", "anzeige"), "breite": tile.get("breite", "normal"), "gruppe": tile.get("gruppe", ""),
+        "tasten": [{"text": b["text"], "aktiv": bool(b["topic"])} for b in tile.get("tasten") or []]
+        if tile.get("typ") == "dreifach" else [],
+        "ohne_wert": False,
         "bestaetigen": bool(tile.get("klick_bestaetigen")),
     }
     res["zusatz_werte"] = []
@@ -1004,7 +1052,10 @@ def evaluate_tile(tile, cache):
             zr = werte_topic(cache, z["topic"], z["json_feld"], 1.0, -1, z["schwellwerte"], z["treffer_modus"])
             res["zusatz"].extend(m for m in zr["treffer"] if m["text"])
     if not tile["topic"]:
-        res["fehler"] = "Kein Topic gewählt"
+        if tile.get("typ") == "dreifach":
+            res["ohne_wert"] = True        # Schaltflaeche ohne Status-Topic
+        else:
+            res["fehler"] = "Kein Topic gewählt"
         return res
     r = werte_topic(cache, tile["topic"], tile["json_feld"], tile["faktor"], tile["nachkommastellen"],
                     tile["schwellwerte"], tile["treffer_modus"])
@@ -1120,6 +1171,7 @@ class App:
                 "verbunden": self.mqtt.connected,
                 "status": self.mqtt.status,
             },
+            "gruppen": cfg["gruppen"],
             "kacheln": tiles,
         }
 
@@ -1133,6 +1185,7 @@ class App:
             "server": cfg["server"],
             "broker": b,
             "kacheln": cfg["kacheln"],
+            "gruppen": cfg["gruppen"],
             "aktiver_port": port,
             "adressen": ["http://%s:%d" % (ip, port) for ip in local_ips()],
             "config_pfad": CONFIG_PATH,
@@ -1303,6 +1356,8 @@ def make_handler(app):
 
             if p == "/api/tiles":
                 tile = normalize_tile(data, keep_id=True)
+                if tile["gruppe"] not in set(g["id"] for g in app.store.cfg["gruppen"]):
+                    tile["gruppe"] = ""
                 with app.store.lock:
                     tiles = app.store.cfg["kacheln"]
                     for i, t in enumerate(tiles):
@@ -1310,7 +1365,9 @@ def make_handler(app):
                             tiles[i] = tile
                             break
                     else:
+                        gruppe = tile["gruppe"]
                         tile = normalize_tile(data, keep_id=False)
+                        tile["gruppe"] = gruppe
                         tiles.append(tile)
                     app.store.save()
                 app.mqtt.ensure_subscriptions()
@@ -1364,6 +1421,30 @@ def make_handler(app):
                     app.store.cfg["kacheln"] = new
                     app.store.save()
                 return self._json({"ok": True})
+
+            if p == "/api/tiles/taste":
+                tid = str(data.get("id") or "")
+                nr = _as_int(data.get("nr"), -1, 0, 2)
+                tile = next((t for t in app.store.snapshot()["kacheln"] if t["id"] == tid), None)
+                if tile is None or tile.get("typ") != "dreifach" or nr < 0:
+                    return self._err("Schaltfläche nicht gefunden", 404)
+                b = tile["tasten"][nr]
+                if not b["topic"]:
+                    return self._err("Für diesen Bereich ist kein Topic festgelegt")
+                ok, msg = app.mqtt.publish(b["topic"], b["payload"], b["retain"])
+                print("[MQTT] Schaltfläche '%s' [%s] -> %s = %s: %s" % (tile["name"], b["text"], b["topic"], b["payload"], msg))
+                return self._json({"ok": ok, "meldung": msg, "text": b["text"]}, 200 if ok else 503)
+
+            if p == "/api/gruppen":
+                gruppen = normalize_gruppen(data.get("gruppen"))
+                with app.store.lock:
+                    app.store.cfg["gruppen"] = gruppen
+                    gids = set(g["id"] for g in gruppen)
+                    for t in app.store.cfg["kacheln"]:
+                        if t.get("gruppe") not in gids:
+                            t["gruppe"] = ""
+                    app.store.save()
+                return self._json({"ok": True, "gruppen": gruppen})
 
             if p == "/api/tiles/klick":
                 tid = str(data.get("id") or "")
@@ -1512,11 +1593,59 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .status-dot.idle{ background:var(--text-dim); }
 
   /* ---------- Kacheln ---------- */
-  #tiles{
-    padding:28px var(--gut-r) 28px var(--gut-l); max-width:2400px; margin:0 auto;
-    display:grid; grid-template-columns:repeat(auto-fill, minmax(min(var(--tile-min), 100%), 1fr));
-    gap:18px; align-items:stretch;
+  #tiles{ padding:28px var(--gut-r) 28px var(--gut-l); max-width:2400px; margin:0 auto; }
+  /* Raster aus halben Spalten: normale Kachel = 2 Spalten, schmale Kachel = 1 Spalte */
+  .tile-grid{
+    display:grid; gap:18px; align-items:stretch;
+    grid-template-columns:repeat(auto-fill, minmax(min(calc((var(--tile-min) - 18px) / 2), 100%), 1fr));
   }
+  .tile-grid > .tile{ grid-column:span 2; }
+  .tile-grid > .tile.schmal{ grid-column:span 1; }
+  .tile-grid + .group, .group + .group{ margin-top:26px; }
+  .group-head{
+    display:flex; align-items:center; gap:10px; width:100%; background:none; border:none; cursor:pointer;
+    color:var(--text); padding:6px 2px 10px; margin:0 0 14px; border-bottom:1px solid var(--border);
+    font-family:var(--sans); font-size:14px; font-weight:600; text-transform:uppercase; letter-spacing:.5px;
+    text-align:left; -webkit-tap-highlight-color:transparent;
+  }
+  .group-head .chev{ width:18px; height:18px; color:var(--accent); transition:transform .2s ease; flex-shrink:0; }
+  .group.zu .group-head .chev{ transform:rotate(-90deg); }
+  .group.zu .group-head{ margin-bottom:0; }
+  .group-count{ font-family:var(--mono); font-size:11px; color:var(--text-dim); font-weight:400;
+    border:1px solid var(--border); border-radius:20px; padding:1px 8px; }
+  /* schmale Kachel: kompakter Kopf */
+  .tile.schmal .tile-head{ flex-direction:column; align-items:flex-start; gap:7px; padding:10px; position:relative; }
+  .tile.schmal .tile-icon{ width:30px; height:30px; border-radius:7px; }
+  .tile.schmal .tile-icon svg{ width:18px; height:18px; }
+  .tile.schmal .tile-titles{ width:100%; }
+  .tile.schmal .tile-name{ font-size:12.5px; display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .tile.schmal .msg-dot{ position:absolute; top:10px; right:10px; }
+  .tile.schmal .tap-ico{ position:absolute; top:9px; right:26px; }
+  .tile.schmal .tile-body{ padding:10px; gap:8px; }
+  .tile.schmal .tile-value{ font-size:clamp(18px, 17cqi, 30px); }
+  .tile.schmal .tile-value.nodata, .tile.schmal .tile-value.err{ font-size:11.5px; }
+  .tile.schmal .chip{ font-size:10px; padding:2px 7px; }
+  /* Schaltflaeche mit drei Bereichen */
+  .tri{ display:flex; flex-direction:column; gap:8px; }
+  .tri-btn{
+    display:flex; align-items:center; justify-content:center; min-height:46px; padding:6px 10px;
+    background:#1b2027; color:var(--text); border:1px solid var(--border); border-radius:8px;
+    font-family:var(--sans); font-size:15px; font-weight:600; cursor:pointer; user-select:none; -webkit-user-select:none;
+    -webkit-tap-highlight-color:transparent; transition:background .12s ease, border-color .12s ease, transform .08s ease;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0;
+  }
+  .tri-btn:hover{ border-color:#3a4250; }
+  .tri-btn:active, .tri-btn.gedrueckt{ background:var(--accent); color:#12100c; border-color:var(--accent); transform:scale(.98); }
+  .tri-btn:disabled{ opacity:.35; cursor:default; }
+  .tile.schmal .tri-btn{ min-height:42px; font-size:14px; padding:6px; }
+  .tile.dreifach .tile-body{ justify-content:flex-end; }
+  .tile-value.klein{ font-size:clamp(18px, 9cqi, 28px); }
+  .preview-wrap .tile.schmal{ max-width:170px; }
+  .gruppe-row{ display:flex; align-items:center; gap:8px; padding:8px 0; border-bottom:1px solid var(--border); flex-wrap:wrap; }
+  .gruppe-row:last-child{ border-bottom:none; }
+  .gruppe-row input[type=text]{ flex:1 1 180px; width:auto; }
+  .gruppe-row .checkbox-row{ margin:0; font-size:12px; }
+  .tri-edit{ border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:10px; background:#0f1216; }
   .tile{
     background:var(--panel); border:1px solid var(--border); border-radius:10px;
     overflow:hidden; display:flex; flex-direction:column; container-type:inline-size;
@@ -1733,7 +1862,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
   /* iPhone (hoch und quer): immer genau zwei Kacheln nebeneinander.
      iPad/Rechner: Anzahl richtet sich nach der Fensterbreite (auto-fill oben). */
   @media (max-width:600px), (max-height:500px) and (pointer:coarse){
-    #tiles{ grid-template-columns:repeat(2, minmax(0, 1fr)); }
+    .tile-grid{ grid-template-columns:repeat(4, minmax(0, 1fr)); gap:12px; }
+    .tile.schmal .tile-body{ padding:8px; }
+    .tile.schmal .tri-btn{ font-size:clamp(10.5px, 15.5cqi, 13px); padding:4px 2px; min-height:44px; }
     .tile-value{ font-size:clamp(22px, 13cqi, 40px); }
   }
   @media (hover:none){ .btn-mini{ padding:8px 12px; font-size:12px; } }
@@ -1787,6 +1918,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
       Reihenfolge mit den Pfeilen ändern.</div>
     <button class="btn" onclick="openTileModal()">+ Kachel hinzufügen</button>
     <div id="tileManageList" style="margin-top:14px;"></div>
+  </div>
+
+  <div class="settings-section">
+    <h2>Gruppen</h2>
+    <div class="hint-text">Kacheln lassen sich in Gruppen zusammenfassen (Zuordnung im Kachel-Editor). Gruppen erscheinen
+      unter den Kacheln ohne Gruppe und lassen sich in der Anzeige per Antippen auf- und zuklappen. Änderungen werden sofort gespeichert.</div>
+    <button class="btn" onclick="addGruppe()">+ Gruppe hinzufügen</button>
+    <div id="gruppenList" style="margin-top:12px;"></div>
   </div>
 
   <div class="settings-section">
@@ -1846,8 +1985,24 @@ INDEX_HTML = r"""<!DOCTYPE html>
     <h2 id="tileModalTitle">Kachel</h2>
     <div class="form-grid">
       <div class="field full"><label class="lbl">Name</label><input type="text" id="tName" maxlength="60" placeholder="z. B. Waschmaschine"></div>
+      <div class="field"><label class="lbl">Art der Kachel</label>
+        <select id="tTyp" onchange="updateTypFelder(); schedulePreview()">
+          <option value="anzeige">Anzeige (Wert eines Topics)</option>
+          <option value="dreifach">Schaltfläche mit 3 Bereichen</option>
+        </select></div>
+      <div class="field"><label class="lbl">Breite</label>
+        <select id="tBreite" onchange="schedulePreview()">
+          <option value="normal">Normal</option>
+          <option value="schmal">Schmal (halbe Breite)</option>
+        </select></div>
+      <div class="field full"><label class="lbl">Gruppe</label><select id="tGruppe"></select></div>
+      <div class="full" id="dreiBox" style="display:none;">
+        <div class="hint-text">Jeder Bereich sendet beim Antippen seinen eigenen Payload an sein eigenes Topic –
+          z. B. für einen Rollladen: oben hoch, Mitte Stopp, unten runter.</div>
+        <div id="dreiList"></div>
+      </div>
       <div class="field full topic-pick">
-        <label class="lbl">MQTT-Topic</label>
+        <label class="lbl" id="tTopicLbl">MQTT-Topic</label>
         <input type="text" id="tTopic" placeholder="Topic suchen oder eingeben ..." autocomplete="off" autocapitalize="off" spellcheck="false">
         <div class="suggest" id="topicSuggest"></div>
       </div>
@@ -1896,6 +2051,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
     <div id="zusatzList"></div>
     <button class="btn-mini" onclick="addZusatz()">+ Weiteres Topic</button>
 
+    <div id="klickBox">
     <hr class="sep">
     <label class="lbl">Aktion beim Antippen der Kachel (optional)</label>
     <div class="hint-text">Beim Antippen der Kachel wird eine Nachricht an dieses Topic gesendet. Topic leer lassen = keine Aktion.</div>
@@ -1921,6 +2077,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
         <div class="checkbox-row"><input type="checkbox" id="tKConfirm"><label for="tKConfirm">Vor dem Senden nachfragen</label></div>
         <div class="checkbox-row"><input type="checkbox" id="tKRetain"><label for="tKRetain">Als „retained“ senden</label></div>
       </div>
+    </div>
     </div>
     <datalist id="topicDatalist"></datalist>
 
@@ -1999,18 +2156,22 @@ function dotOn(t){
   return st.on;
 }
 const TAP_SVG = '<svg class="ico tap-ico" viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z"/></svg>';
+const CHEV_SVG = '<svg class="ico chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>';
 function tileHtml(t, nowServer, dot, vorschau){
   const col = t.farbe;
+  const drei = t.typ === 'dreifach';
   const styleTile = col ? ` style="border-color:${col}99; box-shadow:0 0 0 1px ${col}33, 0 0 18px ${col}14;"` : '';
   const styleIcon = col ? ` style="color:${col}; border-color:${col}88;"` : '';
   let valueHtml;
   if(t.fehler){
     valueHtml = `<div class="tile-value err">${esc(t.fehler)}</div>`;
+  }else if(t.ohne_wert){
+    valueHtml = '';
   }else if(!t.hat_wert){
     valueHtml = `<div class="tile-value nodata">Noch kein Wert empfangen</div>`;
   }else{
     const vstyle = col ? ` style="color:${col}"` : '';
-    valueHtml = `<div class="tile-value"${vstyle}>${esc(t.wert)}${t.einheit ? `<span class="tile-unit">${esc(t.einheit)}</span>` : ''}</div>`;
+    valueHtml = `<div class="tile-value${drei ? ' klein' : ''}"${vstyle}>${esc(t.wert)}${t.einheit ? `<span class="tile-unit">${esc(t.einheit)}</span>` : ''}</div>`;
   }
   const subs = (t.zusatz_werte || []).map(z => `<div class="tile-sub">
       ${z.bezeichnung ? `<span class="sub-lbl">${esc(z.bezeichnung)}</span>` : ''}
@@ -2019,13 +2180,15 @@ function tileHtml(t, nowServer, dot, vorschau){
   const chips = (t.treffer || []).concat(t.zusatz || []).filter(m => m.text).map(m =>
     `<span class="chip" style="color:${m.farbe}" title="${esc(m.text)}">${esc(m.text)}</span>`).join('');
   const klick = t.klickbar && !vorschau ? ` onclick="tileClick('${esc(t.id)}')" title="Antippen sendet die festgelegte MQTT-Nachricht"` : '';
-  return `<div class="tile${t.klickbar ? ' clickable' : ''}"${styleTile}${klick} data-id="${esc(t.id)}">
+  const tri = drei ? `<div class="tri">${(t.tasten || []).map((b, i) =>
+      `<button type="button" class="tri-btn" ${b.aktiv ? '' : 'disabled'} ${vorschau ? '' : `onclick="tasteClick(event,'${esc(t.id)}',${i})"`} title="${esc(b.text)}">${esc(b.text || '–')}</button>`).join('')}</div>` : '';
+  return `<div class="tile${t.klickbar ? ' clickable' : ''}${t.breite === 'schmal' ? ' schmal' : ''}${drei ? ' dreifach' : ''}"${styleTile}${klick} data-id="${esc(t.id)}">
     <div class="tile-head">
       <div class="tile-icon"${styleIcon}>${iconSvg(t.symbol)}</div>
       <div class="tile-titles"><div class="tile-name" title="${esc(t.name)}">${esc(t.name)}</div></div>
-      ${t.klickbar ? TAP_SVG : ''}<span class="msg-dot ${dot ? 'on' : ''}" title="Wechselt bei jeder neuen MQTT-Nachricht"></span>
+      ${t.klickbar ? TAP_SVG : ''}${t.ohne_wert ? '' : `<span class="msg-dot ${dot ? 'on' : ''}" title="Wechselt bei jeder neuen MQTT-Nachricht"></span>`}
     </div>
-    <div class="tile-body">${valueHtml}${subs ? `<div class="tile-subs">${subs}</div>` : ''}${chips ? `<div class="tile-chips">${chips}</div>` : ''}</div>
+    <div class="tile-body">${valueHtml}${subs ? `<div class="tile-subs">${subs}</div>` : ''}${chips ? `<div class="tile-chips">${chips}</div>` : ''}${tri}</div>
   </div>`;
 }
 
@@ -2040,7 +2203,46 @@ function renderTiles(){
       <button class="btn" onclick="enterSettings()">&#9881; Einstellungen öffnen</button></div>`;
     return;
   }
-  main.innerHTML = STATE.kacheln.map(t => tileHtml(t, nowServer, dotOn(t))).join('');
+  const h = t => tileHtml(t, nowServer, dotOn(t));
+  const gruppen = STATE.gruppen || [];
+  const gids = new Set(gruppen.map(g => g.id));
+  const lose = STATE.kacheln.filter(t => !t.gruppe || !gids.has(t.gruppe));
+  let html = lose.length ? `<div class="tile-grid">${lose.map(h).join('')}</div>` : '';
+  for(const g of gruppen){
+    const ts = STATE.kacheln.filter(t => t.gruppe === g.id);
+    if(!ts.length) continue;
+    const zu = gruppeZu(g);
+    html += `<section class="group${zu ? ' zu' : ''}">
+      <button type="button" class="group-head" onclick="toggleGruppe('${esc(g.id)}')" aria-expanded="${zu ? 'false' : 'true'}">
+        ${CHEV_SVG}<span>${esc(g.name)}</span><span class="group-count">${ts.length}</span></button>
+      ${zu ? '' : `<div class="tile-grid">${ts.map(h).join('')}</div>`}</section>`;
+  }
+  main.innerHTML = html;
+}
+function gruppeZu(g){
+  const v = lsGet('gruppeZu_' + g.id, null);
+  return v === null ? !!g.eingeklappt : v === '1';
+}
+function toggleGruppe(id){
+  const g = (STATE.gruppen || []).find(x => x.id === id);
+  if(!g) return;
+  lsSet('gruppeZu_' + id, gruppeZu(g) ? '0' : '1');
+  renderTiles();
+}
+let tasteBusy = false;
+async function tasteClick(ev, id, nr){
+  ev.stopPropagation();
+  if(tasteBusy) return;
+  const btn = ev.currentTarget;
+  btn.classList.add('gedrueckt');
+  tasteBusy = true;
+  const t = STATE && STATE.kacheln.find(k => k.id === id);
+  try{
+    const r = await api('/api/tiles/taste', {id, nr});
+    toast(r.ok ? `${t ? t.name + ': ' : ''}${r.text || ''} gesendet` : (r.meldung || r.fehler || 'Fehler'), !!r.ok);
+  }catch(e){ toast('Dashboard nicht erreichbar', false); }
+  tasteBusy = false;
+  setTimeout(refresh, 400);
 }
 
 function renderBroker(){
@@ -2137,6 +2339,7 @@ function fillSettings(){
   document.getElementById('infoConfig').textContent = CFG.config_pfad;
   document.getElementById('quitBtn').style.display = CFG.beenden_moeglich ? '' : 'none';
   renderManageList();
+  renderGruppen();
 }
 
 function renderManageList(){
@@ -2145,13 +2348,53 @@ function renderManageList(){
   if(!tiles.length){ el.innerHTML = '<div class="t-empty">Noch keine Kacheln angelegt.</div>'; return; }
   el.innerHTML = tiles.map((t, i) => `<div class="manage-row">
       <div class="manage-icon">${iconSvg(t.symbol)}</div>
-      <div class="manage-info">${esc(t.name)}<div class="manage-sub">${esc(t.topic || '(kein Topic)')}${t.json_feld ? ' &rarr; ' + esc(t.json_feld) : ''}${t.einheit ? ' &middot; ' + esc(t.einheit) : ''}${t.schwellwerte.length ? ' &middot; ' + t.schwellwerte.length + ' Schwellwert(e)' : ''}${(t.zusatz_topics || []).length ? ' &middot; +' + t.zusatz_topics.length + ' Topic(s)' : ''}${t.klick_topic ? ' &middot; ' + (t.klick_modus === 'umschalten' ? 'Umschalten: ' : 'Aktion: ') + esc(t.klick_topic) : ''}</div></div>
+      <div class="manage-info">${esc(t.name)}<div class="manage-sub">${t.typ === 'dreifach' ? 'Schaltfläche (3 Bereiche)' + (t.topic ? ' &middot; ' : '') : ''}${t.typ === 'dreifach' && !t.topic ? '' : esc(t.topic || '(kein Topic)')}${t.breite === 'schmal' ? ' &middot; schmal' : ''}${t.gruppe && (CFG.gruppen || []).find(g => g.id === t.gruppe) ? ' &middot; Gruppe: ' + esc(CFG.gruppen.find(g => g.id === t.gruppe).name) : ''}${t.json_feld ? ' &rarr; ' + esc(t.json_feld) : ''}${t.einheit ? ' &middot; ' + esc(t.einheit) : ''}${t.schwellwerte.length ? ' &middot; ' + t.schwellwerte.length + ' Schwellwert(e)' : ''}${(t.zusatz_topics || []).length ? ' &middot; +' + t.zusatz_topics.length + ' Topic(s)' : ''}${t.klick_topic ? ' &middot; ' + (t.klick_modus === 'umschalten' ? 'Umschalten: ' : 'Aktion: ') + esc(t.klick_topic) : ''}</div></div>
       <div class="manage-actions">
         <button class="btn-mini" onclick="moveTile(${i},-1)" ${i === 0 ? 'disabled' : ''} title="nach oben">&uarr;</button>
         <button class="btn-mini" onclick="moveTile(${i},1)" ${i === tiles.length - 1 ? 'disabled' : ''} title="nach unten">&darr;</button>
         <button class="btn-mini" onclick="openTileModal('${esc(t.id)}')">Bearbeiten</button>
         <button class="btn-mini btn-delete" onclick="deleteTile('${esc(t.id)}')">Löschen</button>
       </div></div>`).join('');
+}
+
+function renderGruppen(){
+  const el = document.getElementById('gruppenList');
+  const gr = CFG.gruppen || [];
+  if(!gr.length){ el.innerHTML = '<div class="t-empty">Noch keine Gruppen angelegt.</div>'; return; }
+  el.innerHTML = gr.map((g, i) => {
+    const n = CFG.kacheln.filter(t => t.gruppe === g.id).length;
+    return `<div class="gruppe-row">
+      <input type="text" value="${esc(g.name)}" maxlength="40" onchange="CFG.gruppen[${i}].name = this.value.trim() || 'Gruppe'; saveGruppen()">
+      <span class="group-count">${n} Kachel(n)</span>
+      <div class="checkbox-row"><input type="checkbox" id="gz${i}" ${g.eingeklappt ? 'checked' : ''} onchange="CFG.gruppen[${i}].eingeklappt = this.checked; saveGruppen()"><label for="gz${i}">eingeklappt starten</label></div>
+      <button class="btn-mini" onclick="moveGruppe(${i},-1)" ${i === 0 ? 'disabled' : ''}>&uarr;</button>
+      <button class="btn-mini" onclick="moveGruppe(${i},1)" ${i === gr.length - 1 ? 'disabled' : ''}>&darr;</button>
+      <button class="btn-mini btn-delete" onclick="deleteGruppe(${i})">Löschen</button>
+    </div>`;
+  }).join('');
+}
+async function saveGruppen(){
+  const r = await api('/api/gruppen', {gruppen: CFG.gruppen});
+  if(r.ok){ await loadConfig(); renderGruppen(); renderManageList(); refresh(); }
+}
+function addGruppe(){
+  CFG.gruppen = (CFG.gruppen || []).concat([{id:'', name:'Neue Gruppe ' + ((CFG.gruppen || []).length + 1), eingeklappt:false}]);
+  saveGruppen().then(() => {
+    const inp = document.querySelectorAll('#gruppenList input[type=text]');
+    if(inp.length){ inp[inp.length - 1].focus(); inp[inp.length - 1].select(); }
+  });
+}
+function moveGruppe(i, d){
+  const j = i + d;
+  if(j < 0 || j >= CFG.gruppen.length) return;
+  [CFG.gruppen[i], CFG.gruppen[j]] = [CFG.gruppen[j], CFG.gruppen[i]];
+  saveGruppen();
+}
+async function deleteGruppe(i){
+  const g = CFG.gruppen[i];
+  if(!await confirmDialog('Gruppe löschen', `Gruppe „${g.name}“ löschen? Die Kacheln bleiben erhalten und stehen danach ohne Gruppe.`, 'Löschen')) return;
+  CFG.gruppen.splice(i, 1);
+  saveGruppen();
 }
 
 async function moveTile(i, d){
@@ -2272,7 +2515,10 @@ function loadBrowser(){
 function blankTile(){
   return {id:'', name:'', topic:'', json_feld:'', einheit:'', nachkommastellen:-1, faktor:1, symbol:'info', treffer_modus:'alle', schwellwerte:[],
           zusatz_topics:[], klick_topic:'', klick_payload:'', klick_retain:false, klick_bestaetigen:false,
-          klick_modus:'fest', klick_wert_1:'1', klick_wert_2:'0', klick_zustand_topic:'', klick_zustand_json:''};
+          klick_modus:'fest', klick_wert_1:'1', klick_wert_2:'0', klick_zustand_topic:'', klick_zustand_json:'',
+          typ:'anzeige', breite:'normal', gruppe:'',
+          tasten:[{text:'▲ Hoch', topic:'', payload:'', retain:false}, {text:'■ Stopp', topic:'', payload:'', retain:false},
+                  {text:'▼ Runter', topic:'', payload:'', retain:false}]};
 }
 async function openTileModal(id, topic){
   if(!CFG) await loadConfig();
@@ -2298,6 +2544,13 @@ async function openTileModal(id, topic){
   document.getElementById('tKZTopic').value = editTile.klick_zustand_topic;
   document.getElementById('tKZJson').value = editTile.klick_zustand_json;
   updateKlickFelder();
+  document.getElementById('tTyp').value = editTile.typ;
+  document.getElementById('tBreite').value = editTile.breite;
+  document.getElementById('tGruppe').innerHTML = '<option value="">Keine Gruppe</option>' +
+    (CFG.gruppen || []).map(g => `<option value="${esc(g.id)}">${esc(g.name)}</option>`).join('');
+  document.getElementById('tGruppe').value = editTile.gruppe || '';
+  renderDrei();
+  updateTypFelder();
   document.getElementById('tKConfirm').checked = !!editTile.klick_bestaetigen;
   document.getElementById('tKRetain').checked = !!editTile.klick_retain;
   document.getElementById('tileMsg').textContent = '';
@@ -2342,13 +2595,25 @@ function readTileForm(){
   editTile.klick_wert_2 = document.getElementById('tKW2').value;
   editTile.klick_zustand_topic = document.getElementById('tKZTopic').value.trim();
   editTile.klick_zustand_json = document.getElementById('tKZJson').value.trim();
+  editTile.typ = document.getElementById('tTyp').value;
+  editTile.breite = document.getElementById('tBreite').value;
+  editTile.gruppe = document.getElementById('tGruppe').value;
+  editTile.tasten = Array.from(document.querySelectorAll('#dreiList .tri-edit')).map(b => ({
+    text: b.querySelector('.d-text').value,
+    topic: b.querySelector('.d-topic').value.trim(),
+    payload: b.querySelector('.d-payload').value,
+    retain: b.querySelector('.d-retain').checked,
+  }));
   editTile.klick_bestaetigen = document.getElementById('tKConfirm').checked;
   editTile.klick_retain = document.getElementById('tKRetain').checked;
   return editTile;
 }
 async function saveTile(){
   const t = readTileForm();
-  if(!t.topic){ document.getElementById('tileMsg').textContent = 'Bitte ein Topic wählen.'; return; }
+  if(t.typ === 'dreifach'){
+    if(!t.tasten.some(b => b.topic)){ document.getElementById('tileMsg').textContent = 'Bitte mindestens für einen Bereich ein Topic eintragen.'; return; }
+    if(t.tasten.some(b => /[+#]/.test(b.topic))){ document.getElementById('tileMsg').textContent = 'Topics der Bereiche dürfen kein + oder # enthalten.'; return; }
+  }else if(!t.topic){ document.getElementById('tileMsg').textContent = 'Bitte ein Topic wählen.'; return; }
   if(!t.name){ document.getElementById('tileMsg').textContent = 'Bitte einen Namen eingeben.'; return; }
   if(/[+#]/.test(t.klick_topic)){ document.getElementById('tileMsg').textContent = 'Das Aktions-Topic darf kein + oder # enthalten.'; return; }
   const r = await api('/api/tiles', t);
@@ -2477,6 +2742,25 @@ function removeZusatz(i){
   editTile.zusatz_topics.splice(i, 1);
   renderThresholds();
   schedulePreview();
+}
+const DREI_NAMEN = ['Oberer Bereich', 'Mittlerer Bereich', 'Unterer Bereich'];
+const DREI_BSP = ['z. B. OPEN', 'z. B. STOP', 'z. B. CLOSE'];
+function renderDrei(){
+  document.getElementById('dreiList').innerHTML = editTile.tasten.map((b, i) => `<div class="tri-edit">
+      <div class="zusatz-head"><span class="lbl">${DREI_NAMEN[i]}</span></div>
+      <div class="form-grid keep2">
+        <div class="field"><label class="lbl">Beschriftung</label><input type="text" class="d-text" maxlength="30" value="${esc(b.text)}" oninput="schedulePreview()"></div>
+        <div class="field"><label class="lbl">Payload</label><input type="text" class="d-payload" value="${esc(b.payload)}" placeholder="${DREI_BSP[i]}" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+        <div class="field full"><label class="lbl">Topic</label><input type="text" class="d-topic" list="topicDatalist" value="${esc(b.topic)}" placeholder="z. B. cmnd/rollo/wohnzimmer" autocomplete="off" autocapitalize="off" spellcheck="false" oninput="schedulePreview()"></div>
+      </div>
+      <div class="checkbox-row"><input type="checkbox" class="d-retain" id="dr${i}" ${b.retain ? 'checked' : ''}><label for="dr${i}">Als „retained“ senden</label></div>
+    </div>`).join('');
+}
+function updateTypFelder(){
+  const drei = document.getElementById('tTyp').value === 'dreifach';
+  document.getElementById('dreiBox').style.display = drei ? '' : 'none';
+  document.getElementById('klickBox').style.display = drei ? 'none' : '';
+  document.getElementById('tTopicLbl').textContent = drei ? 'Status-Topic (optional, z. B. Position in %)' : 'MQTT-Topic';
 }
 function updateKlickFelder(){
   const um = document.getElementById('tKMode').value === 'umschalten';

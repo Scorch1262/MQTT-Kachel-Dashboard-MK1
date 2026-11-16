@@ -4,7 +4,7 @@ Lokales Web-Dashboard, das Werte aus **MQTT-Topics als Kacheln** anzeigt – im
 dunklen, technischen Design des Drucker Dashboards MK6. Ein einziges
 Python-Skript (`app.py`), **keine Zusatzpakete**, keine Cloud.
 
-**Version: 1.8.0**
+**Version: 1.9.0**
 
 ![Vorschau: Kachel-Ansicht am Rechner und auf dem iPhone](docs/vorschau.png)
 
@@ -40,8 +40,11 @@ Python-Skript (`app.py`), **keine Zusatzpakete**, keine Cloud.
   Antippen wird abwechselnd Wert 1 / Wert 2 gesendet (z. B. 1 → 0 → 1), passend zum aktuellen
   Wert des Topics. Kacheln mit Aktion tragen ein kleines Blitz-Symbol.
 - **Schaltfläche mit 3 Bereichen** (Kachel-Art im Editor), z. B. für Rollläden: oben „Hoch“,
-  Mitte „Stopp“, unten „Runter“ – jeder Bereich mit eigener Beschriftung, eigenem Topic, Payload
-  und retained-Option. Optional zeigt ein Status-Topic einen Wert darüber an (z. B. Position in %).
+  Mitte „Stopp“, unten „Runter“ – jeder Bereich mit eigener Beschriftung und **beliebig vielen
+  Topics mit eigenem Payload** (werden beim Antippen nacheinander gesendet, je mit retained-Option).
+  Jeder Bereich kann sich **als „betätigt“ einfärben**, wenn sein Status-Topic (leer = erstes
+  Sende-Topic, optional JSON-Feld) einen Vergleichswert hat – z. B. „Runter“ orange bei `closed`.
+  Optional zeigt ein Status-Topic einen Wert darüber an (z. B. Position in %).
 - **Schmale Kacheln** (Breite „Schmal“ = halbe Breite) für jede Kachel-Art – auf dem iPhone passen
   so vier schmale Kacheln nebeneinander.
 - **Gruppen:** Kacheln lassen sich Gruppen zuordnen (*Einstellungen → Gruppen*). Gruppen stehen
@@ -112,9 +115,9 @@ direkt neben der App.
 ## 4. GL.iNet Brume 2 – Zip kopieren und installieren (ohne GitHub)
 
 ```
-scp MQTT-Kachel-Dashboard-MK1-v1.8.0.zip root@<BRUME-IP>:/tmp/
+scp MQTT-Kachel-Dashboard-MK1-v1.9.0.zip root@<BRUME-IP>:/tmp/
 ssh root@<BRUME-IP>
-cd /tmp && unzip -o MQTT-Kachel-Dashboard-MK1-v1.8.0.zip
+cd /tmp && unzip -o MQTT-Kachel-Dashboard-MK1-v1.9.0.zip
 sh MQTT-Kachel-Dashboard-MK1/install.sh
 ```
 
@@ -224,8 +227,8 @@ gesichert und das Programm startet mit Standardwerten.
 - `vergleich`: `>=`, `>`, `<=`, `<`, `==`, `!=`, `enthaelt`
 - `farbe`: `gruen`, `orange`, `rot`, `blau`, `gelb`, `lila`, `grau`
 - `nachkommastellen`: `-1` = automatisch
-- `typ`: `anzeige` oder `dreifach` (Schaltfläche mit `tasten`: drei Einträge mit `text`, `topic`,
-  `payload`, `retain`); `breite`: `normal` oder `schmal`; `gruppe`: ID aus der Liste `gruppen`
+- `typ`: `anzeige` oder `dreifach` (Schaltfläche mit `tasten`: drei Einträge mit `text`,
+  `sendungen` = Liste aus `topic`/`payload`/`retain`, sowie `status_wert`, `status_topic`, `status_json`); `breite`: `normal` oder `schmal`; `gruppe`: ID aus der Liste `gruppen`
   (`{"id", "name", "eingeklappt"}`) oder leer
 - `klick_modus`: `fest` (immer `klick_payload`) oder `umschalten` (abwechselnd `klick_wert_1` /
   `klick_wert_2`; Zustand aus `klick_zustand_topic`, leer = `klick_topic`)
@@ -260,6 +263,8 @@ brume2/offline-paket-bauen-*    Offline-Paket lokal bauen (Windows/Mac)
 
 ## Versionen
 
+- **1.9.0** – Bereiche der 3-teiligen Schaltfläche: mehrere Topics/Payloads je Bereich,
+  Hervorhebung „betätigt“ über Status-Topic + Vergleichswert. Alte Konfigurationen werden übernommen.
 - **1.8.0** – Schaltfläche mit 3 Bereichen (eigenes Topic/Payload je Bereich), Option „schmale Kachel“
   (halbe Breite), einklappbare Gruppen.
 - **1.7.0** – Konfiguration hochladen und übernehmen (mit automatischer Sicherung).

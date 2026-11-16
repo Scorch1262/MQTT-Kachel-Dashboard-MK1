@@ -32,7 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 APP_NAME = "MQTT-Kachel-Dashboard-MK1"
-APP_VERSION = "1.8.0"
+APP_VERSION = "1.9.0"
 DEFAULT_PORT = 8085
 CONFIG_FILENAME = "config.json"
 
@@ -294,6 +294,11 @@ def tile_topics(tile):
     zt = klick_zustand_topic(tile)
     if zt and zt not in out:
         out.append(zt)
+    if tile.get("typ") == "dreifach":
+        for b in tile.get("tasten") or []:
+            st = taste_status_topic(b)
+            if st and st not in out:
+                out.append(st)
     return out
 
 
@@ -336,18 +341,63 @@ STANDARD_TASTEN = ["▲ Hoch", "■ Stopp", "▼ Runter"]
 
 
 def normalize_tasten(liste):
-    """Genau drei Bereiche (oben, Mitte, unten) mit Text, Topic, Payload, retain."""
+    """Genau drei Bereiche (oben, Mitte, unten).
+
+    Je Bereich: Beschriftung, beliebig viele Sendungen (Topic + Payload + retain)
+    und optional ein Vergleichswert, ab dem der Bereich als "betaetigt" gefaerbt wird.
+    Alte Konfigurationen (ein Topic/Payload je Bereich) werden uebernommen.
+    """
     liste = liste if isinstance(liste, list) else []
     out = []
     for i in range(3):
         b = liste[i] if i < len(liste) and isinstance(liste[i], dict) else {}
+        roh = b.get("sendungen")
+        if not isinstance(roh, list):
+            roh = [{"topic": b.get("topic"), "payload": b.get("payload"), "retain": b.get("retain")}]
+        sendungen = []
+        for sd in roh:
+            if not isinstance(sd, dict):
+                continue
+            sendungen.append({
+                "topic": str(sd.get("topic") or "").strip()[:300],
+                "payload": str(sd.get("payload") if sd.get("payload") is not None else "")[:2000],
+                "retain": _as_bool(sd.get("retain"), False),
+            })
+        if not sendungen:
+            sendungen = [{"topic": "", "payload": "", "retain": False}]
         out.append({
             "text": (str(b.get("text") if b.get("text") is not None else STANDARD_TASTEN[i]).strip()[:30]),
-            "topic": str(b.get("topic") or "").strip()[:300],
-            "payload": str(b.get("payload") if b.get("payload") is not None else "")[:2000],
-            "retain": _as_bool(b.get("retain"), False),
+            "sendungen": sendungen[:10],
+            "status_topic": str(b.get("status_topic") or "").strip()[:300],
+            "status_json": str(b.get("status_json") or "").strip()[:200],
+            "status_wert": str(b.get("status_wert") if b.get("status_wert") is not None else "").strip()[:200],
         })
     return out
+
+
+def taste_status_topic(b):
+    """Topic, aus dem der Zustand eines Bereichs gelesen wird (leer = erstes Sende-Topic)."""
+    if b.get("status_wert", "") == "":
+        return ""
+    if b.get("status_topic"):
+        return b["status_topic"]
+    return next((sd["topic"] for sd in b.get("sendungen") or [] if sd["topic"]), "")
+
+
+def taste_betaetigt(b, cache):
+    topic = taste_status_topic(b)
+    if not topic:
+        return False
+    entry = cache.get(topic)
+    if entry is None or entry[4]:
+        return False
+    wert = entry[0]
+    if b.get("status_json"):
+        ok, val = extract_json_field(wert, b["status_json"])
+        if not ok:
+            return False
+        wert = ("true" if val else "false") if isinstance(val, bool) else val
+    return gleicher_wert(wert, b["status_wert"])
 
 
 def normalize_gruppen(liste):
@@ -1030,7 +1080,8 @@ def evaluate_tile(tile, cache):
         "fehler": None, "treffer": [], "farbe": None, "nachrichten": 0,
         "zusatz": [], "klickbar": bool(tile.get("klick_topic")) and tile.get("typ") != "dreifach",
         "typ": tile.get("typ", "anzeige"), "breite": tile.get("breite", "normal"), "gruppe": tile.get("gruppe", ""),
-        "tasten": [{"text": b["text"], "aktiv": bool(b["topic"])} for b in tile.get("tasten") or []]
+        "tasten": [{"text": b["text"], "aktiv": any(sd["topic"] for sd in b["sendungen"]),
+                    "betaetigt": taste_betaetigt(b, cache)} for b in tile.get("tasten") or []]
         if tile.get("typ") == "dreifach" else [],
         "ohne_wert": False,
         "bestaetigen": bool(tile.get("klick_bestaetigen")),
@@ -1429,11 +1480,20 @@ def make_handler(app):
                 if tile is None or tile.get("typ") != "dreifach" or nr < 0:
                     return self._err("Schaltfläche nicht gefunden", 404)
                 b = tile["tasten"][nr]
-                if not b["topic"]:
+                sendungen = [sd for sd in b["sendungen"] if sd["topic"]]
+                if not sendungen:
                     return self._err("Für diesen Bereich ist kein Topic festgelegt")
-                ok, msg = app.mqtt.publish(b["topic"], b["payload"], b["retain"])
-                print("[MQTT] Schaltfläche '%s' [%s] -> %s = %s: %s" % (tile["name"], b["text"], b["topic"], b["payload"], msg))
-                return self._json({"ok": ok, "meldung": msg, "text": b["text"]}, 200 if ok else 503)
+                ok, msg, n_ok = True, "Gesendet", 0
+                for sd in sendungen:
+                    o, m = app.mqtt.publish(sd["topic"], sd["payload"], sd["retain"])
+                    print("[MQTT] Schaltfläche '%s' [%s] -> %s = %s: %s" % (tile["name"], b["text"], sd["topic"], sd["payload"], m))
+                    if o:
+                        n_ok += 1
+                    else:
+                        ok, msg = False, m
+                if not ok and n_ok:
+                    msg = "%d von %d gesendet – %s" % (n_ok, len(sendungen), msg)
+                return self._json({"ok": ok, "meldung": msg, "text": b["text"], "anzahl": n_ok}, 200 if ok else 503)
 
             if p == "/api/gruppen":
                 gruppen = normalize_gruppen(data.get("gruppen"))
@@ -1636,6 +1696,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
   }
   .tri-btn:hover{ border-color:#3a4250; }
   .tri-btn:active, .tri-btn.gedrueckt{ background:var(--accent); color:#12100c; border-color:var(--accent); transform:scale(.98); }
+  /* Zustand "betaetigt": Status-Topic hat den Vergleichswert */
+  .tri-btn.an{ background:var(--accent); color:#12100c; border-color:var(--accent); box-shadow:0 0 12px rgba(255,145,66,.35); }
+  .send-row{ display:grid; grid-template-columns:minmax(0,1.6fr) minmax(0,1fr) auto auto; gap:6px; align-items:center; margin-bottom:6px; }
+  .send-row input[type=text]{ padding:8px 7px; font-size:12px; }
+  .send-row .retain-lbl{ display:flex; align-items:center; gap:4px; font-size:11px; color:var(--text-dim); white-space:nowrap; }
+  .send-row .retain-lbl input{ width:16px; height:16px; accent-color:var(--accent); margin:0; }
+  .send-head{ font-size:10.5px; color:var(--text-dim); text-transform:uppercase; letter-spacing:.4px; margin-bottom:4px; }
   .tri-btn:disabled{ opacity:.35; cursor:default; }
   .tile.schmal .tri-btn{ min-height:42px; font-size:14px; padding:6px; }
   .tile.dreifach .tile-body{ justify-content:flex-end; }
@@ -1864,6 +1931,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
   @media (max-width:600px), (max-height:500px) and (pointer:coarse){
     .tile-grid{ grid-template-columns:repeat(4, minmax(0, 1fr)); gap:12px; }
     .tile.schmal .tile-body{ padding:8px; }
+    .send-row{ grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto; padding:8px; border:1px solid var(--border); border-radius:8px; }
+    .send-row .s-topic{ grid-column:1/-1; }
+    .send-row input[type=text]{ font-size:16px; }
     .tile.schmal .tri-btn{ font-size:clamp(10.5px, 15.5cqi, 13px); padding:4px 2px; min-height:44px; }
     .tile-value{ font-size:clamp(22px, 13cqi, 40px); }
   }
@@ -2181,7 +2251,7 @@ function tileHtml(t, nowServer, dot, vorschau){
     `<span class="chip" style="color:${m.farbe}" title="${esc(m.text)}">${esc(m.text)}</span>`).join('');
   const klick = t.klickbar && !vorschau ? ` onclick="tileClick('${esc(t.id)}')" title="Antippen sendet die festgelegte MQTT-Nachricht"` : '';
   const tri = drei ? `<div class="tri">${(t.tasten || []).map((b, i) =>
-      `<button type="button" class="tri-btn" ${b.aktiv ? '' : 'disabled'} ${vorschau ? '' : `onclick="tasteClick(event,'${esc(t.id)}',${i})"`} title="${esc(b.text)}">${esc(b.text || '–')}</button>`).join('')}</div>` : '';
+      `<button type="button" class="tri-btn${b.betaetigt ? ' an' : ''}" ${b.aktiv ? '' : 'disabled'} ${vorschau ? '' : `onclick="tasteClick(event,'${esc(t.id)}',${i})"`} title="${esc(b.text)}">${esc(b.text || '–')}</button>`).join('')}</div>` : '';
   return `<div class="tile${t.klickbar ? ' clickable' : ''}${t.breite === 'schmal' ? ' schmal' : ''}${drei ? ' dreifach' : ''}"${styleTile}${klick} data-id="${esc(t.id)}">
     <div class="tile-head">
       <div class="tile-icon"${styleIcon}>${iconSvg(t.symbol)}</div>
@@ -2517,8 +2587,8 @@ function blankTile(){
           zusatz_topics:[], klick_topic:'', klick_payload:'', klick_retain:false, klick_bestaetigen:false,
           klick_modus:'fest', klick_wert_1:'1', klick_wert_2:'0', klick_zustand_topic:'', klick_zustand_json:'',
           typ:'anzeige', breite:'normal', gruppe:'',
-          tasten:[{text:'▲ Hoch', topic:'', payload:'', retain:false}, {text:'■ Stopp', topic:'', payload:'', retain:false},
-                  {text:'▼ Runter', topic:'', payload:'', retain:false}]};
+          tasten:['▲ Hoch', '■ Stopp', '▼ Runter'].map(text => ({text, sendungen:[{topic:'', payload:'', retain:false}],
+                  status_topic:'', status_json:'', status_wert:''}))};
 }
 async function openTileModal(id, topic){
   if(!CFG) await loadConfig();
@@ -2600,9 +2670,14 @@ function readTileForm(){
   editTile.gruppe = document.getElementById('tGruppe').value;
   editTile.tasten = Array.from(document.querySelectorAll('#dreiList .tri-edit')).map(b => ({
     text: b.querySelector('.d-text').value,
-    topic: b.querySelector('.d-topic').value.trim(),
-    payload: b.querySelector('.d-payload').value,
-    retain: b.querySelector('.d-retain').checked,
+    sendungen: Array.from(b.querySelectorAll('.send-row')).map(r => ({
+      topic: r.querySelector('.s-topic').value.trim(),
+      payload: r.querySelector('.s-payload').value,
+      retain: r.querySelector('.s-retain').checked,
+    })),
+    status_wert: b.querySelector('.d-swert').value.trim(),
+    status_topic: b.querySelector('.d-stopic').value.trim(),
+    status_json: b.querySelector('.d-sjson').value.trim(),
   }));
   editTile.klick_bestaetigen = document.getElementById('tKConfirm').checked;
   editTile.klick_retain = document.getElementById('tKRetain').checked;
@@ -2611,8 +2686,8 @@ function readTileForm(){
 async function saveTile(){
   const t = readTileForm();
   if(t.typ === 'dreifach'){
-    if(!t.tasten.some(b => b.topic)){ document.getElementById('tileMsg').textContent = 'Bitte mindestens für einen Bereich ein Topic eintragen.'; return; }
-    if(t.tasten.some(b => /[+#]/.test(b.topic))){ document.getElementById('tileMsg').textContent = 'Topics der Bereiche dürfen kein + oder # enthalten.'; return; }
+    if(!t.tasten.some(b => b.sendungen.some(sd => sd.topic))){ document.getElementById('tileMsg').textContent = 'Bitte mindestens für einen Bereich ein Topic eintragen.'; return; }
+    if(t.tasten.some(b => b.sendungen.some(sd => /[+#]/.test(sd.topic)))){ document.getElementById('tileMsg').textContent = 'Topics der Bereiche dürfen kein + oder # enthalten.'; return; }
   }else if(!t.topic){ document.getElementById('tileMsg').textContent = 'Bitte ein Topic wählen.'; return; }
   if(!t.name){ document.getElementById('tileMsg').textContent = 'Bitte einen Namen eingeben.'; return; }
   if(/[+#]/.test(t.klick_topic)){ document.getElementById('tileMsg').textContent = 'Das Aktions-Topic darf kein + oder # enthalten.'; return; }
@@ -2745,16 +2820,46 @@ function removeZusatz(i){
 }
 const DREI_NAMEN = ['Oberer Bereich', 'Mittlerer Bereich', 'Unterer Bereich'];
 const DREI_BSP = ['z. B. OPEN', 'z. B. STOP', 'z. B. CLOSE'];
+function sendRowHtml(sd, i){
+  return `<div class="send-row">
+      <input type="text" class="s-topic" list="topicDatalist" value="${esc(sd.topic)}" placeholder="Topic, z. B. cmnd/rollo/wohnzimmer" autocomplete="off" autocapitalize="off" spellcheck="false" oninput="schedulePreview()">
+      <input type="text" class="s-payload" value="${esc(sd.payload)}" placeholder="Payload, ${DREI_BSP[i]}" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <label class="retain-lbl" title="Als retained senden"><input type="checkbox" class="s-retain" ${sd.retain ? 'checked' : ''}>retain</label>
+      <button type="button" class="btn-mini btn-delete" onclick="removeSendung(this)" title="entfernen">&#10005;</button>
+    </div>`;
+}
 function renderDrei(){
-  document.getElementById('dreiList').innerHTML = editTile.tasten.map((b, i) => `<div class="tri-edit">
+  document.getElementById('dreiList').innerHTML = editTile.tasten.map((b, i) => `<div class="tri-edit" data-i="${i}">
       <div class="zusatz-head"><span class="lbl">${DREI_NAMEN[i]}</span></div>
+      <div class="field"><label class="lbl">Beschriftung</label><input type="text" class="d-text" maxlength="30" value="${esc(b.text)}" oninput="schedulePreview()"></div>
+      <label class="lbl">Beim Antippen senden (alle Einträge nacheinander)</label>
+      <div class="send-list">${b.sendungen.map(sd => sendRowHtml(sd, i)).join('')}</div>
+      <button type="button" class="btn-mini" onclick="addSendung(${i})">+ Topic</button>
+      <hr class="sep" style="margin:12px 0;">
+      <label class="lbl">Als „betätigt“ anzeigen (optional)</label>
+      <div class="hint-text" style="margin-bottom:8px;">Hat das Status-Topic diesen Wert, wird der Bereich farbig hervorgehoben. Leer = keine Anzeige.</div>
       <div class="form-grid keep2">
-        <div class="field"><label class="lbl">Beschriftung</label><input type="text" class="d-text" maxlength="30" value="${esc(b.text)}" oninput="schedulePreview()"></div>
-        <div class="field"><label class="lbl">Payload</label><input type="text" class="d-payload" value="${esc(b.payload)}" placeholder="${DREI_BSP[i]}" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
-        <div class="field full"><label class="lbl">Topic</label><input type="text" class="d-topic" list="topicDatalist" value="${esc(b.topic)}" placeholder="z. B. cmnd/rollo/wohnzimmer" autocomplete="off" autocapitalize="off" spellcheck="false" oninput="schedulePreview()"></div>
+        <div class="field"><label class="lbl">Vergleichswert</label><input type="text" class="d-swert" value="${esc(b.status_wert)}" placeholder="z. B. ON, 1, open" autocomplete="off" autocapitalize="off" spellcheck="false" oninput="schedulePreview()"></div>
+        <div class="field"><label class="lbl">JSON-Feld (optional)</label><input type="text" class="d-sjson" value="${esc(b.status_json)}" placeholder="z. B. state" autocapitalize="off" spellcheck="false" oninput="schedulePreview()"></div>
+        <div class="field full"><label class="lbl">Status-Topic (optional, leer = erstes Topic oben)</label><input type="text" class="d-stopic" list="topicDatalist" value="${esc(b.status_topic)}" placeholder="z. B. stat/rollo/wohnzimmer" autocomplete="off" autocapitalize="off" spellcheck="false" oninput="schedulePreview()"></div>
       </div>
-      <div class="checkbox-row"><input type="checkbox" class="d-retain" id="dr${i}" ${b.retain ? 'checked' : ''}><label for="dr${i}">Als „retained“ senden</label></div>
     </div>`).join('');
+}
+function addSendung(i){
+  readTileForm();
+  editTile.tasten[i].sendungen.push({topic:'', payload:'', retain:false});
+  renderDrei();
+  const rows = document.querySelectorAll(`#dreiList .tri-edit[data-i="${i}"] .s-topic`);
+  rows[rows.length - 1].focus();
+}
+function removeSendung(btn){
+  const box = btn.closest('.tri-edit');
+  btn.closest('.send-row').remove();
+  readTileForm();
+  const i = parseInt(box.dataset.i, 10);
+  if(!editTile.tasten[i].sendungen.length) editTile.tasten[i].sendungen.push({topic:'', payload:'', retain:false});
+  renderDrei();
+  schedulePreview();
 }
 function updateTypFelder(){
   const drei = document.getElementById('tTyp').value === 'dreifach';

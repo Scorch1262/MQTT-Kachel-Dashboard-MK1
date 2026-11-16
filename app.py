@@ -32,7 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 APP_NAME = "MQTT-Kachel-Dashboard-MK1"
-APP_VERSION = "1.9.0"
+APP_VERSION = "1.10.0"
 DEFAULT_PORT = 8085
 CONFIG_FILENAME = "config.json"
 
@@ -1452,6 +1452,23 @@ def make_handler(app):
                 return self._json({"ok": True, "kacheln": len(neu["kacheln"]),
                                    "sicherung": os.path.basename(sicherung) if sicherung else ""})
 
+            if p == "/api/tiles/copy":
+                tid = str(data.get("id") or "")
+                with app.store.lock:
+                    tiles = app.store.cfg["kacheln"]
+                    idx = next((i for i, t in enumerate(tiles) if t["id"] == tid), -1)
+                    if idx < 0:
+                        return self._err("Kachel nicht gefunden", 404)
+                    kopie = json.loads(json.dumps(tiles[idx]))
+                    vorhandene = set(t["id"] for t in tiles)
+                    kopie["id"] = _gen_id()
+                    while kopie["id"] in vorhandene:
+                        kopie["id"] = _gen_id()
+                    kopie["name"] = (kopie["name"] + " (Kopie)")[:60]
+                    tiles.insert(idx + 1, kopie)      # direkt hinter dem Original
+                    app.store.save()
+                return self._json({"ok": True, "kachel": kopie})
+
             if p == "/api/tiles/delete":
                 tid = str(data.get("id") or "")
                 with app.store.lock:
@@ -2423,6 +2440,7 @@ function renderManageList(){
         <button class="btn-mini" onclick="moveTile(${i},-1)" ${i === 0 ? 'disabled' : ''} title="nach oben">&uarr;</button>
         <button class="btn-mini" onclick="moveTile(${i},1)" ${i === tiles.length - 1 ? 'disabled' : ''} title="nach unten">&darr;</button>
         <button class="btn-mini" onclick="openTileModal('${esc(t.id)}')">Bearbeiten</button>
+        <button class="btn-mini" onclick="copyTile('${esc(t.id)}')" title="Kachel mit allen Einstellungen kopieren">Kopieren</button>
         <button class="btn-mini btn-delete" onclick="deleteTile('${esc(t.id)}')">Löschen</button>
       </div></div>`).join('');
 }
@@ -2476,6 +2494,13 @@ async function moveTile(i, d){
   await loadConfig(); renderManageList();
 }
 
+async function copyTile(id){
+  const r = await api('/api/tiles/copy', {id});
+  if(!r.ok){ toast(r.fehler || 'Kopieren fehlgeschlagen', false); return; }
+  await loadConfig(); renderManageList(); renderGruppen(); refresh();
+  toast('Kopie angelegt: ' + r.kachel.name, true);
+  openTileModal(r.kachel.id);      // Kopie gleich zum Anpassen oeffnen
+}
 async function deleteTile(id){
   const t = CFG.kacheln.find(x => x.id === id);
   if(!await confirmDialog('Kachel löschen', `Kachel "${t ? t.name : ''}" wirklich löschen?`, 'Löschen')) return;

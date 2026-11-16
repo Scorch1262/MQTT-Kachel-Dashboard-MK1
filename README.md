@@ -4,7 +4,7 @@ Lokales Web-Dashboard, das Werte aus **MQTT-Topics als Kacheln** anzeigt – im
 dunklen, technischen Design des Drucker Dashboards MK6. Ein einziges
 Python-Skript (`app.py`), **keine Zusatzpakete**, keine Cloud.
 
-**Version: 1.9.0**
+**Version: 1.10.0**
 
 ![Vorschau: Kachel-Ansicht am Rechner und auf dem iPhone](docs/vorschau.png)
 
@@ -115,9 +115,9 @@ direkt neben der App.
 ## 4. GL.iNet Brume 2 – Zip kopieren und installieren (ohne GitHub)
 
 ```
-scp MQTT-Kachel-Dashboard-MK1-v1.9.0.zip root@<BRUME-IP>:/tmp/
+scp MQTT-Kachel-Dashboard-MK1-v1.10.0.zip root@<BRUME-IP>:/tmp/
 ssh root@<BRUME-IP>
-cd /tmp && unzip -o MQTT-Kachel-Dashboard-MK1-v1.9.0.zip
+cd /tmp && unzip -o MQTT-Kachel-Dashboard-MK1-v1.10.0.zip
 sh MQTT-Kachel-Dashboard-MK1/install.sh
 ```
 
@@ -168,7 +168,8 @@ werden: `brume2/offline-paket-bauen-windows.bat` bzw.
    Auswahl. Ist der Inhalt JSON, das gewünschte Feld anklicken.
 3. Einheit, Symbol und Schwellwerte festlegen; die **Vorschau** zeigt live, wie die
    Kachel aussieht.
-4. Mit den Pfeilen in der Kachelliste die Reihenfolge ändern.
+4. Mit den Pfeilen in der Kachelliste die Reihenfolge ändern. **Kopieren** legt eine Kachel mit
+   allen Einstellungen direkt unter dem Original an und öffnet die Kopie gleich zum Anpassen.
 
 **Beispiel Waschmaschine** (Leistung in W über eine Messsteckdose), Modus *Nur ersten Treffer*:
 
@@ -263,6 +264,7 @@ brume2/offline-paket-bauen-*    Offline-Paket lokal bauen (Windows/Mac)
 
 ## Versionen
 
+- **1.10.0** – Kacheln in den Einstellungen kopieren (inkl. aller Einstellungen, Gruppe und Sendungen).
 - **1.9.0** – Bereiche der 3-teiligen Schaltfläche: mehrere Topics/Payloads je Bereich,
   Hervorhebung „betätigt“ über Status-Topic + Vergleichswert. Alte Konfigurationen werden übernommen.
 - **1.8.0** – Schaltfläche mit 3 Bereichen (eigenes Topic/Payload je Bereich), Option „schmale Kachel“
